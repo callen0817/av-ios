@@ -1,0 +1,69 @@
+# ==========================================
+# AV Scan iOS - .gitignore
+# ==========================================
+
+# ----- Heavy Third-Party Libraries & Binaries -----
+# (See EXCLUSIONS.md for local reconstruction instructions)
+zsign_src/build/windows/vs2022/lib/openssl/
+bin/
+*.exe
+*.lib
+*.dll
+*.so
+*.dylib
+!zsign_src/test/dylib/bin/*.dylib
+
+# ----- Intermediate Build Artifacts -----
+build/
+x64/
+[Dd]ebug/
+[Rr]elease/
+x86/
+[Bb]in/
+[Oo]bj/
+*.obj
+*.iobj
+*.ipdb
+*.pdb
+*.tlog
+*.idb
+*.ilk
+*.exp
+
+# ----- Hardware Packet Captures & Network Dumps -----
+# (See EXCLUSIONS.md for regeneration instructions via pktmon)
+*.etl
+*.pcapng
+air_capture*.txt
+netstat.txt
+
+# ----- iOS & Xcode Artifacts -----
+DerivedData/
+*.xcworkspace
+!*.xcworkspace/contents.xcworkspacedata
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+*.xcarchive
+*.ipa
+*.app
+*.dSYM/
+
+# ----- Visual Studio & IDE State -----
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ----- General OS & Temporary Files -----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
