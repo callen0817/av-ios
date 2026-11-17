@@ -17,6 +17,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $AuditScript = Join-Path $PSScriptRoot "verify_toolchain.ps1"
 
@@ -29,7 +30,10 @@ if (-not $AuditJson.ios_cross_compile_ready) {
 }
 
 $IosBuildDir = Join-Path $RepoRoot "build\ios_arm64"
-$AppBundleDir = Join-Path $IosBuildDir "Payload\AVScan.app"
+$StagingDir = Join-Path $RepoRoot "build\staging"
+if (Test-Path $StagingDir) { Remove-Item $StagingDir -Recurse -Force }
+$StagingPayload = Join-Path $StagingDir "Payload"
+$AppBundleDir = Join-Path $StagingPayload "AVScan.app"
 New-Item -ItemType Directory -Path $AppBundleDir -Force | Out-Null
 
 & $AuditJson.tools.cmake -S $RepoRoot -B $IosBuildDir `
@@ -52,15 +56,34 @@ if ($LASTEXITCODE -ne 0) {
 
 Copy-Item (Join-Path $RepoRoot "ios\AVScan\Info.plist") (Join-Path $AppBundleDir "Info.plist") -Force
 Copy-Item (Join-Path $RepoRoot "ios\AVScan\Rendering\Shaders.metal") (Join-Path $AppBundleDir "Shaders.metal") -Force
+if (Test-Path (Join-Path $RepoRoot "ios\AVScan\Assets\av_logo.png")) {
+    Copy-Item (Join-Path $RepoRoot "ios\AVScan\Assets\av_logo.png") (Join-Path $AppBundleDir "av_logo.png") -Force
+}
 
+$BuiltExe = Join-Path $IosBuildDir "AVScan.app\AVScan"
+if (-not (Test-Path $BuiltExe)) {
+    $BuiltExe = Join-Path $IosBuildDir "AVScan"
+}
+if (Test-Path $BuiltExe) {
+    Copy-Item $BuiltExe (Join-Path $AppBundleDir "AVScan") -Force
+}
+
+$IpaOut = Join-Path $RepoRoot "build\AVScan.ipa"
 if ($AuditJson.tools.codesign_tool -and $CertP12 -and $ProvisionProfile) {
-    $IpaOut = Join-Path $RepoRoot "build\AVScan.ipa"
-    & $AuditJson.tools.codesign_tool -k $CertP12 -p $CertPass -m $ProvisionProfile -o $IpaOut -z 9 $AppBundleDir
+    & $AuditJson.tools.codesign_tool -f -k $CertP12 -p $CertPass -m $ProvisionProfile -o $IpaOut -z 9 $AppBundleDir
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Code signing failed."
         exit $LASTEXITCODE
     }
-    Write-Host "Successfully built and signed installable IPA: $IpaOut" -ForegroundColor Green
+    Write-Host "Successfully built and signed installable IPA with Developer Profile: $IpaOut" -ForegroundColor Green
+} elseif ($AuditJson.tools.codesign_tool) {
+    & $AuditJson.tools.codesign_tool -f -a -o $IpaOut -z 9 $AppBundleDir
+    Write-Host "Built ad-hoc signed IPA: $IpaOut (Ready for TrollStore / Sideloadly / AltStore)" -ForegroundColor Green
+    Write-Warning "Developer signing assets (.p12 / .mobileprovision) not supplied. Signed with ad-hoc signature. Once your Apple Developer account is approved, re-run with -CertP12 and -ProvisionProfile for official device provisioning."
 } else {
-    Write-Warning "Unsigned AVScan.app compiled at $AppBundleDir. Provide IOS_SIGN_CERT_P12 and IOS_PROVISION_PROFILE (or sign via Sideloadly) to install on iPhone/iPad."
+    $UnsignedIpa = Join-Path $RepoRoot "build\AVScan_unsigned.ipa"
+    if (Test-Path $UnsignedIpa) { Remove-Item $UnsignedIpa -Force }
+    Add-Type -AssemblyName "System.IO.Compression.FileSystem"
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($StagingPayload, $UnsignedIpa, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+    Write-Host "Packaged ready-to-sideload bundle: $UnsignedIpa" -ForegroundColor Cyan
 }

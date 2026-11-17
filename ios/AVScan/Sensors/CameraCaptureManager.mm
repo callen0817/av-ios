@@ -1,6 +1,7 @@
 #import "CameraCaptureManager.h"
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 
@@ -182,18 +183,26 @@
             }
         }
     } else if (CVPixelBufferGetPlaneCount(pixelBuffer) >= 2) {
-        // YCbCr Bi-Planar (ARKit capturedImage default)
+        // YCbCr Bi-Planar (ARKit capturedImage default) -> Full-color RGB24
         const uint8_t *yPlane = reinterpret_cast<const uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0));
         size_t yStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0);
+        const uint8_t *uvPlane = reinterpret_cast<const uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1));
+        size_t uvStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1);
         for (int y = 0; y < dstH; ++y) {
-            const uint8_t *row = yPlane + (y * 4) * yStride;
+            const uint8_t *yRow = yPlane + (y * 4) * yStride;
+            const uint8_t *uvRow = uvPlane + (y * 2) * uvStride;
             for (int x = 0; x < dstW; ++x) {
-                uint8_t lum = row[x * 4];
+                const int lum = static_cast<int>(yRow[x * 4]);
+                const int cb = static_cast<int>(uvRow[(x * 2) * 2 + 0]) - 128;
+                const int cr = static_cast<int>(uvRow[(x * 2) * 2 + 1]) - 128;
+                const int r = std::clamp(static_cast<int>(lum + 1.402 * cr), 0, 255);
+                const int g = std::clamp(static_cast<int>(lum - 0.344136 * cb - 0.714136 * cr), 0, 255);
+                const int b = std::clamp(static_cast<int>(lum + 1.772 * cb), 0, 255);
                 size_t idx = static_cast<size_t>(y * dstW + x);
-                frame.gray_bytes[idx] = lum;
-                frame.rgb_bytes[idx * 3 + 0] = lum;
-                frame.rgb_bytes[idx * 3 + 1] = lum;
-                frame.rgb_bytes[idx * 3 + 2] = lum;
+                frame.gray_bytes[idx] = static_cast<uint8_t>(lum);
+                frame.rgb_bytes[idx * 3 + 0] = static_cast<uint8_t>(r);
+                frame.rgb_bytes[idx * 3 + 1] = static_cast<uint8_t>(g);
+                frame.rgb_bytes[idx * 3 + 2] = static_cast<uint8_t>(b);
             }
         }
     }

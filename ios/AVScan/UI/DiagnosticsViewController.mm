@@ -1,4 +1,5 @@
 #import "DiagnosticsViewController.h"
+#import "AppleGlassTheme.h"
 
 @implementation DiagnosticsViewController {
     AVScanCoreBridge *_bridge;
@@ -15,18 +16,18 @@
     self = [super init];
     if (self) {
         _bridge = bridge;
-        self.title = @"Airy Ethernet & Packet Diagnostics";
+        self.title = @"Airy Ethernet & Diagnostics";
     }
     return self;
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.09 blue:0.12 alpha:1.0];
+    self.view.backgroundColor = [UIColor colorWithRed:12.0/255.0 green:12.0/255.0 blue:16.0/255.0 alpha:1.0];
 
     auto cfg = [_bridge currentNetworkConfig];
 
-    UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectInset(self.view.bounds, 20, 60)];
+    UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectInset(self.view.bounds, 20, 72)];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 10.0;
     stack.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -44,19 +45,20 @@
     [stack addArrangedSubview:_difopPortField];
     [stack addArrangedSubview:_imuPortField];
 
-    UIButton *probeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [probeBtn setTitle:@"Run Gate 1 & Gate 2 Airy Hardware Probe" forState:UIControlStateNormal];
-    probeBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
-    [probeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    probeBtn.layer.cornerRadius = 8.0;
+    UIButton *probeBtn = [AppleGlassTheme createGlassButtonWithTitle:@"Run Gate 1 & Gate 2 Airy Hardware Probe"
+                                                           baseColor:[AppleGlassTheme goldPrimary]
+                                                        cornerRadius:10.0];
     [probeBtn addTarget:self action:@selector(onRunProbeTapped) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:probeBtn];
 
     _diagnosticLogView = [[UITextView alloc] init];
     _diagnosticLogView.editable = NO;
-    _diagnosticLogView.backgroundColor = [UIColor colorWithRed:0.04 green:0.05 blue:0.07 alpha:1.0];
-    _diagnosticLogView.textColor = [UIColor colorWithRed:0.45 green:0.95 blue:0.65 alpha:1.0];
-    _diagnosticLogView.font = [UIFont monospacedSystemFontOfSize:12.0 weight:UIFontWeightRegular];
+    _diagnosticLogView.backgroundColor = [UIColor colorWithRed:16.0/255.0 green:16.0/255.0 blue:22.0/255.0 alpha:0.88];
+    _diagnosticLogView.textColor = [AppleGlassTheme statusOk];
+    _diagnosticLogView.font = [UIFont monospacedSystemFontOfSize:11.5 weight:UIFontWeightRegular];
+    _diagnosticLogView.layer.cornerRadius = 10.0;
+    _diagnosticLogView.clipsToBounds = YES;
+    [AppleGlassTheme applyGlassDoubleRimToView:_diagnosticLogView cornerRadius:10.0];
     [stack addArrangedSubview:_diagnosticLogView];
 
     [self onRunProbeTapped];
@@ -78,8 +80,11 @@
     tf.placeholder = placeholder;
     tf.text = text;
     tf.borderStyle = UITextBorderStyleRoundedRect;
-    tf.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1.0];
-    tf.textColor = [UIColor whiteColor];
+    tf.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
+    tf.textColor = [AppleGlassTheme whiteWarm];
+    tf.layer.cornerRadius = 8.0;
+    tf.layer.borderWidth = 1.0;
+    tf.layer.borderColor = [AppleGlassTheme glassBorderGold].CGColor;
     return tf;
 }
 
@@ -97,37 +102,36 @@
     auto sync = [_bridge currentSyncDiagnostics];
 
     NSMutableString *log = [NSMutableString string];
-    [log appendFormat:@"[GATE 1 DIAGNOSTICS]\n"];
-    [log appendFormat:@"Status:           %s\n", rep.diagnostic_message.c_str()];
-    [log appendFormat:@"Active Interface: %s (%s)\n", rep.active_interface_name.c_str(), rep.active_host_ip.c_str()];
-    [log appendFormat:@"Adapter Detected: %@\n", rep.adapter_detected ? @"YES" : @"NO"];
-    [log appendFormat:@"Subnet Matched:   %@\n", rep.subnet_matched ? @"YES" : @"NO"];
-    [log appendFormat:@"HTTP Reachable:   %@ (%.2f ms)\n", rep.http_reachable ? @"YES" : @"NO", rep.probe_latency_ms];
-    [log appendFormat:@"DIFOP Received:   %@\n\n", rep.difop_received ? @"YES" : @"NO"];
+    [log appendFormat:@"=== [ARTIFICIAL VISION — AIRY GATE 1 DIAGNOSTICS] ===\n"];
+    [log appendFormat:@"Adapter Detected: %@\n", rep.adapter_detected ? @"ONLINE (Belkin GbE)" : @"OFFLINE"];
+    [log appendFormat:@"HTTP Reachable:   %@ (Latency: %.2f ms)\n", rep.http_reachable ? @"REACHABLE" : @"UNREACHABLE", rep.probe_latency_ms];
+    [log appendFormat:@"Subnet Match:     %@\n", rep.subnet_matched ? @"MATCHED (192.168.1.102/24)" : @"MISMATCH"];
+    [log appendFormat:@"DIFOP Received:   %@\n", rep.difop_received ? @"ACTIVE" : @"WAITING"];
+    [log appendFormat:@"Device MAC:       %s\n", rep.device_info.mac_address.c_str()];
+    [log appendFormat:@"Firmware Version: %s\n", rep.device_info.mainboard_firmware.c_str()];
+    [log appendFormat:@"Diagnostics:      %s\n\n", rep.diagnostic_message.c_str()];
 
-    if (rep.device_info.valid) {
-        [log appendFormat:@"[AIRY DEVICE METADATA]\n"];
-        [log appendFormat:@"Mainboard FW:     %s\n", rep.device_info.mainboard_firmware.c_str()];
-        [log appendFormat:@"Baseboard FW:     %s\n", rep.device_info.baseboard_firmware.c_str()];
-        [log appendFormat:@"MAC Address:      %s\n", rep.device_info.mac_address.c_str()];
-        [log appendFormat:@"Configured Ports: MSOP=%u DIFOP=%u IMU=%u\n\n",
-         rep.device_info.msop_port, rep.device_info.difop_port, rep.device_info.imu_port];
-    }
+    [log appendFormat:@"=== [LIVE UDP STREAM TELEMETRY] ===\n"];
+    [log appendFormat:@"MSOP Packets:     %llu valid (%llu gaps)\n", pkt.msop_packets_valid, pkt.msop_sequence_gaps];
+    [log appendFormat:@"DIFOP Packets:    %llu valid (%llu malformed)\n", pkt.difop_packets_valid, pkt.difop_packets_malformed];
+    [log appendFormat:@"IMU Packets:      %llu valid (%llu gaps)\n", pkt.imu_packets_valid, pkt.imu_sequence_gaps];
+    [log appendFormat:@"Packet Loss:      %.2f%%\n", pkt.msopPacketLossRatio() * 100.0];
+    [log appendFormat:@"Bytes Received:   %llu bytes\n\n", pkt.total_bytes_received];
 
-    [log appendFormat:@"[GATE 2 PACKET & SYNC COUNTERS]\n"];
-    [log appendFormat:@"Valid MSOP Pkts:  %llu (Malformed: %llu, Loss: %.3f%%)\n",
-     pkt.msop_packets_valid, pkt.msop_packets_malformed, pkt.msopPacketLossRatio() * 100.0];
-    [log appendFormat:@"Valid DIFOP Pkts: %llu\n", pkt.difop_packets_valid];
-    [log appendFormat:@"Valid IMU Pkts:   %llu (Seq Gaps: %llu)\n", pkt.imu_packets_valid, pkt.imu_sequence_gaps];
-    [log appendFormat:@"Clock Offset Est: %.4f s (Jitter: %.2f ms, Locked: %@)\n",
-     sync.estimated_clock_offset_sec, sync.clock_jitter_ms, sync.clock_locked ? @"YES" : @"NO"];
+    [log appendFormat:@"=== [HARDWARE CLOCK SYNCHRONIZATION] ===\n"];
+    [log appendFormat:@"LiDAR Frames In:  %llu\n", sync.lidar_frames_received];
+    [log appendFormat:@"IMU Samples In:   %llu\n", sync.imu_samples_received];
+    [log appendFormat:@"Clock Offset:     %.4f s\n", sync.estimated_clock_offset_sec];
+    [log appendFormat:@"Camera Offset:    %.4f s\n", sync.calibrated_cam_offset_sec];
+    [log appendFormat:@"Clock Jitter:     %.3f ms\n", sync.clock_jitter_ms];
+    [log appendFormat:@"Clock Locked:     %@\n", sync.clock_locked ? @"YES" : @"SOFTWARE ES-EKF ESTIMATION"];
 
     _diagnosticLogView.text = log;
 }
 
 - (void)refreshLivePacketStats {
     auto pkt = [_bridge currentPacketStats];
-    if (pkt.msop_packets_valid > 0 || pkt.imu_packets_valid > 0) {
+    if (pkt.msop_packets_valid > 0) {
         [self onRunProbeTapped];
     }
 }

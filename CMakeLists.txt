@@ -24,13 +24,17 @@ set(AVSCAN_CORE_SOURCES
     src/slam/VoxelHashMap.cpp
     src/slam/FastLivo2Engine.cpp
     src/calibration/TargetlessCalibrator.cpp
+    src/calibration/OnlineAutoCalibrator.cpp
     src/backend/ScanContext.cpp
     src/backend/GicpVerifier.cpp
     src/backend/PoseGraphOptimizer.cpp
     src/quality/QualityMonitor.cpp
     src/storage/ProjectStore.cpp
     src/export/PointCloudExporter.cpp
+    src/export/AvSpatialBundleExporter.cpp
+    src/core/DeviceMountProfile.cpp
     src/system/ResourceController.cpp
+    src/terrestrial/TerrestrialStationManager.cpp
 )
 
 add_library(avscan_core STATIC ${AVSCAN_CORE_SOURCES})
@@ -63,6 +67,8 @@ if(AVSCAN_BUILD_IOS_APP)
         ios/AVScan/UI/DiagnosticsViewController.mm
         ios/AVScan/UI/CalibrationViewController.mm
         ios/AVScan/UI/FloorPlanView.mm
+        ios/AVScan/UI/AppleGlassTheme.mm
+        ios/AVScan/UI/AppleGlassSplashScreenView.mm
     )
 
     add_executable(AVScan MACOSX_BUNDLE ${AVSCAN_IOS_SOURCES})
@@ -121,4 +127,8 @@ if(AVSCAN_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_link_libraries(avscan_tests PRIVATE avscan_core)
 
     add_test(NAME AVScanFullTestSuite COMMAND avscan_tests)
+
+    add_executable(avscan_autocalib_test tests/test_online_auto_calibrator.cpp)
+    target_link_libraries(avscan_autocalib_test PRIVATE avscan_core)
+    add_test(NAME OnlineAutoCalibratorTest COMMAND avscan_autocalib_test)
 endif()

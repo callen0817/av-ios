@@ -38,6 +38,26 @@ air_capture*.txt
 netstat.txt
 
 # ----- iOS & Xcode Artifacts -----
+sdks/
+iPhoneOS.sdk.zip
+.zsign_cache/
+.zsign_debug/
+
+# Local Blender scratch scripts, test logs, and intermediate STL/PNG renders
+*.stl
+*.png
+!ios/AVScan/Assets/*.png
+!docs/assets/*.png
+blender_*.txt
+test_stdout.txt
+enclosure_outputs/
+build_kdd_airy_mount.py
+build_v2_enclosures.py
+generate_all_enclosures.py
+inspect_blender.py
+perfect_studio.py
+rebuild_logo_3d.py
+render_assembly_studio.py
 DerivedData/
 *.xcworkspace
 !*.xcworkspace/contents.xcworkspacedata

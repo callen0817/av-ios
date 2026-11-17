@@ -68,9 +68,9 @@ public:
 
     // Attempts automatic 6-DOF relocalization against saved Scan Context descriptors and submaps
     bool attemptRelocalization(const core::LidarFrame& current_local_scan,
-                               const ScanContextDatabase& sc_db,
+                               const backend::ScanContextDatabase& sc_db,
                                const std::vector<core::KeyframeSubmap>& submaps,
-                               const GicpVerifier& gicp,
+                               const backend::GicpVerifier& gicp,
                                math::SE3d& out_recovered_T_world_body,
                                uint64_t& out_matched_keyframe_id,
                                double& out_fitness_rmse_m) const;

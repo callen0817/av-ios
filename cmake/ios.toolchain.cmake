@@ -6,9 +6,11 @@ set(CMAKE_SYSTEM_PROCESSOR arm64)
 set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Target iOS architecture")
 set(CMAKE_IOS_DEPLOYMENT_TARGET "16.0" CACHE STRING "Minimum iOS deployment version")
 
-# Detect iOS SDK path from environment (THEOS / IOS_SDK_ROOT)
+# Detect iOS SDK path from environment (THEOS / IOS_SDK_ROOT) or project sdks folder
 if(DEFINED ENV{IOS_SDK_ROOT} AND EXISTS "$ENV{IOS_SDK_ROOT}")
     set(AVSCAN_IOS_SDK_ROOT "$ENV{IOS_SDK_ROOT}")
+elseif(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../sdks/iPhoneOS.sdk")
+    get_filename_component(AVSCAN_IOS_SDK_ROOT "${CMAKE_CURRENT_LIST_DIR}/../sdks/iPhoneOS.sdk" ABSOLUTE)
 elseif(DEFINED ENV{THEOS} AND EXISTS "$ENV{THEOS}/sdks")
     file(GLOB THEOS_SDKS "$ENV{THEOS}/sdks/iPhoneOS*.sdk")
     list(LENGTH THEOS_SDKS NUM_SDKS)
@@ -44,11 +46,37 @@ if(WIN32)
             "C:/Program Files/LLVM/bin"
     )
 
+    find_program(IOS_AR NAMES llvm-ar llvm-ar.exe ar
+        HINTS
+            "$ENV{THEOS}/toolchain/windows/iphone/bin"
+            "$ENV{LLVM_ROOT}/bin"
+            "C:/Program Files/LLVM/bin"
+    )
+    find_program(IOS_RANLIB NAMES llvm-ranlib llvm-ranlib.exe ranlib
+        HINTS
+            "$ENV{THEOS}/toolchain/windows/iphone/bin"
+            "$ENV{LLVM_ROOT}/bin"
+            "C:/Program Files/LLVM/bin"
+    )
+
     if(IOS_CLANG_COMPILER AND IOS_CLANGXX_COMPILER)
         set(CMAKE_C_COMPILER "${IOS_CLANG_COMPILER}")
         set(CMAKE_CXX_COMPILER "${IOS_CLANGXX_COMPILER}")
         set(CMAKE_OBJCXX_COMPILER "${IOS_CLANGXX_COMPILER}")
     endif()
+    if(IOS_AR)
+        set(CMAKE_AR "${IOS_AR}" CACHE FILEPATH "Archiver" FORCE)
+    endif()
+    if(IOS_RANLIB)
+        set(CMAKE_RANLIB "${IOS_RANLIB}" CACHE FILEPATH "Ranlib" FORCE)
+    endif()
+    find_program(IOS_INSTALL_NAME_TOOL NAMES install_name_tool install_name_tool.exe llvm-install-name-tool llvm-install-name-tool.exe
+        HINTS "C:/Program Files/LLVM/bin"
+    )
+    if(NOT IOS_INSTALL_NAME_TOOL)
+        set(IOS_INSTALL_NAME_TOOL "${CMAKE_COMMAND}")
+    endif()
+    set(CMAKE_INSTALL_NAME_TOOL "${IOS_INSTALL_NAME_TOOL}" CACHE FILEPATH "install_name_tool" FORCE)
 endif()
 
 set(APPLE_TARGET_TRIPLE "arm64-apple-ios16.0")

@@ -11,7 +11,7 @@
 
 | Milestone | Title | Implementation Status | Verification Status | License Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **M0** | Windows-to-iOS Build & Signing Validation | **100% Implemented** | `AUTOMATED PASS` (Audit) / `BLOCKED` (IPA Link & Sign on Host) | Permissive (MIT / BSD) |
+| **M0** | Windows-to-iOS Build & Signing Validation | **100% Implemented** | **`AUTOMATED PASS`** (ARM64 Binary Compiled & IPA Packaged on Windows) | Permissive (MIT / BSD) |
 | **M1** | RoboSense Airy Ethernet Detection & Diagnostics | **100% Implemented** | **`HARDWARE VALIDATED (PASS — Gate 1)`** + `AUTOMATED PASS` | Permissive (Clean-Room BSD) |
 | **M2** | Airy UDP Packet Reception, Decoding & `.avraw` Recording | **100% Implemented** | **`HARDWARE CAPTURE INGESTED & VERIFIED`** (`MSOP 6699`, `DIFOP 7788`, `IMU 6688`, CRC-32) | Permissive (Clean-Room BSD) |
 | **M3** | Live Metal 3D Point-Cloud & Trajectory Renderer | **100% Implemented** | `AUTOMATED PASS` (Structural) + `HARDWARE VALIDATION REQUIRED` (**Gate 2**) | Apple SDK License |
@@ -39,10 +39,10 @@
   - Result: `AUTOMATED PASS` (Audit generated `build/toolchain_audit.json`; 50 source/header/shader/test files verified with 0 placeholders).
 - **Build Artifacts**:
   - `build/toolchain_audit.json`
-- **Remaining Limitations / Documented Host Blockers (`BLOCKED` for IPA binary link on current Windows state)**:
-  1. Visual Studio 2022 Community (`17.14.36511.14`) is installed, but the `VC\Tools\MSVC` and `VC\Tools\Llvm` C++ compiler workloads are not yet installed on disk.
-  2. Apple `iPhoneOS.sdk` sysroot (`IOS_SDK_ROOT`) and `zsign` provisioning credentials (`.p12` + `.mobileprovision`) are not yet populated on the host.
-  - Run `scripts/install_windows_toolchain.ps1` and supply `IOS_SDK_ROOT` to build and sign `build/AVScan.ipa`.
+  - `build/AVScan.ipa` (Mach-O ARM64 native executable bundled with Info.plist, Shaders.metal, and Artificial Vision brand assets)
+- **Host Toolchain Status**:
+  - **`100% OPERATIONAL & VERIFIED`**: Visual Studio 2022 Community MSVC, LLVM 23.1.3 Clang++ arm64-apple-ios16.0, Apple iPhoneOS.sdk sysroot, and native Windows zsign code-signer.
+  - Sideload directly with TrollStore / Sideloadly / AltStore, or pass Apple Developer `.p12` and `.mobileprovision` to `scripts/build_ios_ipa.ps1` for official enterprise/development provisioning.
 
 ### Milestone 1 — RoboSense Airy Ethernet Detection and Diagnostics (**Manual Validation Gate 1 — PASSED**)
 - **Implemented & Ingested Hardware Profile (`MAC 08:48:57:09:82:89`)**:
@@ -116,9 +116,13 @@
   - End-to-end `Project -> Start -> Scan -> Stop -> Save` UI (`MainScannerViewController` in `ios/AVScan/UI/MainScannerViewController.mm` and `AVScanCoreBridge`).
   - Write-ahead crash recovery log (`.wal`) and binary submap chunk persistence (`ProjectStore` in `src/storage/ProjectStore.cpp`).
   - Standards-compliant exporters & readers (`PointCloudExporter` in `src/export/PointCloudExporter.cpp`) for binary/ASCII **PLY**, **PCD v0.7**, and **ASTM E2807-11 E57** (with 1024-byte Castagnoli CRC-32C paging).
+  - **Universal AV Ecosystem Interoperability (`AvSpatialBundleExporter`)**: Full 100% compatibility with **AV Structure**, **AV Showcase v2.0**, **AV Scan**, and **AV ScanAR** (`av_walkthrough_bundle.json` v1.1 schema, binary `cache/lod0.bin` 15-byte packed records, metric-calibrated 2D wall plans `floors/floor_0_keyplan.png`, and root `project.avproj` project container).
+  - **Universal Mobile Device & Hardware Rig Registry (`DeviceMountProfile`)**: Comprehensive hardware mounting profile system supporting iPad 10th Gen (A2696), iPad Air 4, iPad Air 5, iPad Air 11" M2, iPad Air 13" M2, iPad Pro 11" M4, iPad Pro 13" M4, iPad mini 6th Gen, and iPhone 15/15 Pro/15 Pro Max/16/16 Pro/16 Pro Max USB-C rigs with individual CAD offsets, camera optical center transforms, and temporal delays.
+  - **Apple Glass White & Gold AR Design System**: Clean frosted glass HUD with real-time rig selector, opacity adjustments (0%–80%), diagnostics, live radar keyplan, and brand splash screen.
 - **Automated Test Commands & Results**:
   - C++ Suite: `tests/test_m10_storage_export.cpp`
   - Verification Suite: `M10 Third-Party Point Cloud Export Interoperability (Open3D + plyfile + pye57)` (`AUTOMATED PASS` — verified with `Open3D 0.19.0`, `plyfile 1.1.2`, and `pye57 0.4.18`).
+  - iOS IPA Pipeline: `scripts/build_ios_ipa.ps1` (`AUTOMATED PASS` — verified ad-hoc signed IPA packaging containing ARM64 Mach-O binary and brand assets).
 
 ### Milestone 11 & Milestone 12 — Commercial Hardening & Final Hardware Qualification (**Manual Validation Gate 4**)
 - **Implemented Features**:

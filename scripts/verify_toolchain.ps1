@@ -66,6 +66,13 @@ $ld64Path = Find-BinaryPath -Names @("ld64.lld.exe", "ld64.lld", "lld.exe") -Ext
 )
 
 $iosSdkRoot = $env:IOS_SDK_ROOT
+if (-not $iosSdkRoot -and (Test-Path (Join-Path $RepoRoot "sdks\iPhoneOS.sdk"))) {
+    $iosSdkRoot = Join-Path $RepoRoot "sdks\iPhoneOS.sdk"
+}
+if (-not $iosSdkRoot -and (Test-Path (Join-Path $RepoRoot "sdks"))) {
+    $repoSdkDirs = Get-ChildItem -Path (Join-Path $RepoRoot "sdks") -Directory -Filter "iPhoneOS*.sdk" -ErrorAction SilentlyContinue
+    if ($repoSdkDirs) { $iosSdkRoot = $repoSdkDirs[-1].FullName }
+}
 if (-not $iosSdkRoot -and $theosRoot -and (Test-Path (Join-Path $theosRoot "sdks"))) {
     $sdkDirs = Get-ChildItem -Path (Join-Path $theosRoot "sdks") -Directory -Filter "iPhoneOS*.sdk" -ErrorAction SilentlyContinue
     if ($sdkDirs) { $iosSdkRoot = $sdkDirs[-1].FullName }

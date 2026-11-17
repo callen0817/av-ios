@@ -5,8 +5,11 @@
 #include "avscan/backend/GicpVerifier.hpp"
 #include "avscan/backend/PoseGraphOptimizer.hpp"
 #include "avscan/backend/ScanContext.hpp"
+#include "avscan/calibration/OnlineAutoCalibrator.hpp"
 #include "avscan/calibration/TargetlessCalibrator.hpp"
+#include "avscan/core/DeviceMountProfile.hpp"
 #include "avscan/core/Types.hpp"
+#include "avscan/export/AvSpatialBundleExporter.hpp"
 #include "avscan/export/PointCloudExporter.hpp"
 #include "avscan/quality/QualityMonitor.hpp"
 #include "avscan/sensors/AiryDiscovery.hpp"
@@ -15,10 +18,27 @@
 #include "avscan/storage/ProjectStore.hpp"
 #include "avscan/sync/TimeSynchronizer.hpp"
 #include "avscan/system/ResourceController.hpp"
+#include "avscan/terrestrial/TerrestrialStationManager.hpp"
+
+typedef NS_ENUM(NSInteger, AVScanAcquisitionMode) {
+    AVScanAcquisitionModeMobileSlam = 0,
+    AVScanAcquisitionModeTerrestrial = 1,
+    AVScanAcquisitionModeHybridFlashStation = 2
+};
+
+typedef NS_ENUM(NSInteger, AVMotorVerificationStatus) {
+    AVMotorVerificationStatusUnverified = 0,
+    AVMotorVerificationStatusManualConfirmed = 1,
+    AVMotorVerificationStatusAutomaticConnected = 2
+};
 
 @interface AVScanCoreBridge : NSObject
 
+@property (nonatomic, assign) AVScanAcquisitionMode acquisitionMode;
+@property (nonatomic, assign) AVMotorVerificationStatus motorVerificationStatus;
 @property (nonatomic, assign, readonly) BOOL isScanning;
+@property (nonatomic, assign, readonly) BOOL isTerrestrialStationActive;
+@property (nonatomic, assign, readonly) BOOL isSlamPausedForStation;
 @property (nonatomic, copy, readonly) NSString *activeProjectId;
 @property (nonatomic, copy, readonly) NSString *activeProjectDir;
 
@@ -27,6 +47,7 @@
 // Project & Session Lifecycle
 - (BOOL)createOrOpenProjectWithId:(NSString *)projectId name:(NSString *)projectName;
 - (BOOL)startScanningSessionWithVisualFusion:(BOOL)enableVisual useArkitCamera:(BOOL)useArkit;
+- (BOOL)startScanningSessionWithAutoCalib:(BOOL)autoCalib;
 - (void)stopScanningSession;
 - (BOOL)saveAndRefineSession;
 - (BOOL)capturePointOfInterestPhotoWithNote:(NSString *)note;
@@ -35,6 +56,28 @@
 - (BOOL)exportCurrentMapToPly:(NSString *)filePath;
 - (BOOL)exportCurrentMapToPcd:(NSString *)filePath;
 - (BOOL)exportCurrentMapToE57:(NSString *)filePath;
+- (BOOL)exportCurrentMapToSpatialBundle:(NSString *)outputDir error:(NSError **)error;
+- (BOOL)exportCurrentMapToAvShowcaseProject:(NSString *)showcaseRootDir error:(NSError **)error;
+
+// Device Mount Profiles & Hardware Rig
+- (NSArray<NSDictionary<NSString *, id> *> *)availableDeviceProfiles;
+- (NSString *)activeDeviceProfileId;
+- (NSString *)activeDeviceProfileDisplayName;
+- (BOOL)setActiveDeviceProfileWithId:(NSString *)profileId;
+- (void)detectAndApplyHostDeviceProfile;
+
+// Terrestrial Station Mode (Mode B) & Hybrid Flash Station during SLAM
+- (BOOL)confirmMotorAttachedWithAutomatic:(BOOL)isAuto model:(NSString *)motorModel;
+- (BOOL)startTerrestrialStationWithId:(NSString *)stationId name:(NSString *)stationName stepDeg:(double)stepDeg isFlashDuringSlam:(BOOL)isFlash;
+- (BOOL)beginTerrestrialStop;
+- (BOOL)finishTerrestrialStop;
+- (BOOL)advanceToNextTerrestrialStop;
+- (BOOL)repeatCurrentTerrestrialStop;
+- (BOOL)finalizeAndSaveTerrestrialStation;
+- (BOOL)resumeSlamAfterFlashStation;
+- (uint32_t)currentTerrestrialStopIndex;
+- (double)terrestrialAccumulationProgress;
+- (BOOL)isTerrestrialStationary;
 
 // Diagnostics & State Access
 - (avscan::sensors::AiryDiscoveryReport)runAiryDiagnostics;
@@ -49,6 +92,7 @@
 - (std::vector<avscan::core::SlamState>)currentTrajectory;
 - (size_t)loopClosureCount;
 - (avscan::core::ExtrinsicCalibrationProfile)currentCalibrationProfile;
+- (avscan::calibration::AutoCalibStatus)currentAutoCalibStatus;
 - (void)applyCalibrationProfile:(const avscan::core::ExtrinsicCalibrationProfile &)profile;
 
 @end

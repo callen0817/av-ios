@@ -39,6 +39,7 @@ struct Vec3d {
     Vec3d& operator+=(const Vec3d& o) { x += o.x; y += o.y; z += o.z; return *this; }
     Vec3d& operator-=(const Vec3d& o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
     Vec3d& operator*=(double s) { x *= s; y *= s; z *= s; return *this; }
+    Vec3d& operator/=(double s) { x /= s; y /= s; z /= s; return *this; }
 
     double dot(const Vec3d& o) const { return x * o.x + y * o.y + z * o.z; }
     Vec3d cross(const Vec3d& o) const {
@@ -238,6 +239,27 @@ struct Quatd {
         }
         q.normalize();
         return q;
+    }
+
+    static Quatd fromEuler(double roll, double pitch, double yaw) {
+        double cy = std::cos(yaw * 0.5);
+        double sy = std::sin(yaw * 0.5);
+        double cp = std::cos(pitch * 0.5);
+        double sp = std::sin(pitch * 0.5);
+        double cr = std::cos(roll * 0.5);
+        double sr = std::sin(roll * 0.5);
+
+        Quatd q;
+        q.w = cr * cp * cy + sr * sp * sy;
+        q.x = sr * cp * cy - cr * sp * sy;
+        q.y = cr * sp * cy + sr * cp * sy;
+        q.z = cr * cp * sy - sr * sp * cy;
+        q.normalize();
+        return q;
+    }
+
+    static Quatd FromEuler(double roll, double pitch, double yaw) {
+        return fromEuler(roll, pitch, yaw);
     }
 
     Vec3d toEulerRollPitchYaw() const {
