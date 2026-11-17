@@ -76,8 +76,11 @@ typedef NS_ENUM(NSInteger, AVMotorVerificationStatus) {
 - (BOOL)finalizeAndSaveTerrestrialStation;
 - (BOOL)resumeSlamAfterFlashStation;
 - (uint32_t)currentTerrestrialStopIndex;
+- (size_t)completedTerrestrialStopCount;
 - (double)terrestrialAccumulationProgress;
 - (BOOL)isTerrestrialStationary;
+- (avscan::terrestrial::TerrestrialCaptureState)currentTerrestrialCaptureState;
+- (avscan::terrestrial::TerrestrialStationMetadata)currentTerrestrialStationMetadata;
 
 // Diagnostics & State Access
 - (avscan::sensors::AiryDiscoveryReport)runAiryDiagnostics;

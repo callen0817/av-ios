@@ -42,6 +42,12 @@ public:
     bool cancelStation();
     bool finalizeAndSaveStation(std::string& out_error);
 
+    // Constrained 1-DOF rotation registration refinement around the tripod Z-axis
+    bool refineStopAnglesViaOverlap(double& out_mean_rmse_m);
+
+    // Coverage analyzer across azimuth [0..360) and elevation [-90..+90]
+    void computeCoverageMetrics(double& out_az_cov, double& out_el_cov, std::string& out_warning) const;
+
     // State queries
     TerrestrialCaptureState getCaptureState() const;
     uint32_t getCurrentStopIndex() const;
@@ -54,6 +60,9 @@ public:
     TerrestrialStationMetadata getStationMetadata() const;
 
 private:
+    bool finishCurrentStopLocked();
+    bool writeStationArtifactsLocked(std::string& out_error);
+
     TerrestrialStationConfig config_;
     core::DeviceMountProfile mount_profile_;
     TripodAxisCalibration axis_calib_;
@@ -67,11 +76,14 @@ private:
     uint32_t current_stop_idx_{0};
     double current_nominal_angle_deg_{0.0};
     double stop_start_time_sec_{0.0};
+    double latest_frame_end_sec_{0.0};
 
-    // IMU stillness detection
+    // IMU stillness detection (Gyro + Accel sliding variance)
     double latest_gyro_norm_{0.0};
+    double latest_accel_dev_{0.0};
     double stillness_duration_sec_{0.0};
     double last_imu_time_sec_{0.0};
+    bool has_received_imu_{false};
 
     // Temporary accumulation buffer for active stop
     std::vector<core::LidarPointXYZIRT> current_stop_points_;
@@ -79,6 +91,7 @@ private:
 
     // Completed stops
     std::vector<StopObservation> stops_;
+    double refined_overall_rmse_m_{0.0};
 };
 
 } // namespace terrestrial

@@ -74,6 +74,9 @@ struct TerrestrialStationMetadata {
     
     double overall_rmse_m{0.0};
     bool is_closed_360{false};
+    double azimuth_coverage_ratio{1.0};
+    double elevation_coverage_ratio{0.85};
+    std::string coverage_warning{};
     
     std::string pointcloud_ply_relpath{"pointcloud.ply"};
     std::string pointcloud_lod0_relpath{"cache/lod0.bin"};

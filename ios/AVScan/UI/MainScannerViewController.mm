@@ -385,15 +385,21 @@
         }];
         return;
     } else if (_bridge.isTerrestrialStationActive && _bridge.isSlamPausedForStation) {
-        // Step active flash station
-        [_bridge advanceToNextTerrestrialStop];
+        // Step active flash station: 6 stops (indices 0..5)
+        size_t doneStops = [_bridge completedTerrestrialStopCount];
         uint32_t stopIdx = [_bridge currentTerrestrialStopIndex];
-        if (stopIdx >= 5) {
+        if (stopIdx >= 5 && doneStops >= 6) {
             [_bridge finalizeAndSaveTerrestrialStation];
             [_poiPhotoBtn setTitle:@"Flash 60°" forState:UIControlStateNormal];
         } else {
-            [_poiPhotoBtn setTitle:[NSString stringWithFormat:@"Step %u/6", stopIdx + 1] forState:UIControlStateNormal];
+            [_bridge advanceToNextTerrestrialStop];
+            uint32_t nextIdx = [_bridge currentTerrestrialStopIndex];
+            [_poiPhotoBtn setTitle:[NSString stringWithFormat:@"Step %u/6", nextIdx + 1] forState:UIControlStateNormal];
         }
+        return;
+    } else if (_bridge.isTerrestrialStationActive && !_bridge.isSlamPausedForStation) {
+        // Repeat current terrestrial stop if tapped during standalone Terrestrial Mode
+        [_bridge repeatCurrentTerrestrialStop];
         return;
     }
 
@@ -604,6 +610,40 @@
     auto qual = [_bridge latestQualityReport];
     auto autoCalib = [_bridge currentAutoCalibStatus];
     size_t loops = [_bridge loopClosureCount];
+
+    if (_bridge.isTerrestrialStationActive) {
+        uint32_t stopIdx = [_bridge currentTerrestrialStopIndex];
+        double prog = [_bridge terrestrialAccumulationProgress] * 100.0;
+        BOOL isStill = [_bridge isTerrestrialStationary];
+        auto tState = [_bridge currentTerrestrialCaptureState];
+        NSString *stateStr = @"WAITING FOR STILLNESS (HOLD STEADY)";
+        if (tState == avscan::terrestrial::TerrestrialCaptureState::ACCUMULATING_STOP) {
+            stateStr = [NSString stringWithFormat:@"ACCUMULATING STOP %u/6 (%.0f%%)", stopIdx + 1, prog];
+        } else if (tState == avscan::terrestrial::TerrestrialCaptureState::STOP_COMPLETED) {
+            stateStr = [NSString stringWithFormat:@"STOP %u/6 COMPLETE — ROTATE +60° & TAP NEXT", stopIdx + 1];
+        } else if (tState == avscan::terrestrial::TerrestrialCaptureState::STATION_COMPLETED) {
+            stateStr = @"ALL 6 STOPS COMPLETE — TAP FINISH STATION";
+        }
+
+        _hudStatusBanner.text = [NSString stringWithFormat:
+            @"RIG: %@  ·  %@\nSTOP: %u/6 (%u°)  ·  PTS: %zu  ·  STILL: %@\n%@",
+            [_bridge activeDeviceProfileDisplayName],
+            _bridge.isSlamPausedForStation ? @"HYBRID FLASH STATION" : @"TERRESTRIAL STATION",
+            stopIdx + 1,
+            stopIdx * 60,
+            cloud.size(),
+            isStill ? @"YES" : @"SETTLING",
+            stateStr];
+
+        auto meta = [_bridge currentTerrestrialStationMetadata];
+        _hudMetricsLabel.text = [NSString stringWithFormat:
+            @"PROGRESS: %.0f%%  ·  STOPS DONE: %zu/6\nAZ COV: %.0f%%  ·  EL COV: %.0f%%",
+            prog,
+            meta.total_stops,
+            meta.azimuth_coverage_ratio * 100.0,
+            meta.elevation_coverage_ratio * 100.0];
+        return;
+    }
 
     _hudStatusBanner.text = [NSString stringWithFormat:
         @"RIG: %@  ·  %@\nLOOPS: %zu  ·  PTS: %zu  ·  LOSS: %.2f%%\n%s",

@@ -74,8 +74,9 @@
             AVScanCoreBridge *strongSelf = weakSelf;
             if (!strongSelf) return;
             double nowSec = CACurrentMediaTime();
-            strongSelf->_synchronizer.pushLidarFrame(frame, nowSec);
-            if (strongSelf->_isTerrestrialStationActive && strongSelf->_stationManager) {
+            if (!strongSelf->_isTerrestrialStationActive) {
+                strongSelf->_synchronizer.pushLidarFrame(frame, nowSec);
+            } else if (strongSelf->_stationManager) {
                 strongSelf->_stationManager->pushLidarFrame(frame);
             }
             std::lock_guard<std::mutex> lock(strongSelf->_stateMutex);
@@ -87,8 +88,9 @@
             AVScanCoreBridge *strongSelf = weakSelf;
             if (!strongSelf) return;
             double nowSec = CACurrentMediaTime();
-            strongSelf->_synchronizer.pushImu(imu, nowSec);
-            if (strongSelf->_isTerrestrialStationActive && strongSelf->_stationManager) {
+            if (!strongSelf->_isTerrestrialStationActive) {
+                strongSelf->_synchronizer.pushImu(imu, nowSec);
+            } else if (strongSelf->_stationManager) {
                 strongSelf->_stationManager->pushImuMeasurement(imu);
             }
         },
@@ -540,6 +542,21 @@
 
 - (std::vector<avscan::core::LidarPointXYZIRT>)latestGlobalPointCloud {
     std::lock_guard<std::mutex> lock(_stateMutex);
+    if (_isTerrestrialStationActive && _stationManager) {
+        auto statPts = _stationManager->buildStationPointCloud();
+        if (_isSlamPausedForStation) {
+            std::vector<avscan::core::LidarPointXYZIRT> combined = _cachedGlobalCloud;
+            for (const auto &p : statPts) {
+                avscan::math::Vec3d v(p.x, p.y, p.z);
+                avscan::math::Vec3d vw = _flashStationAnchorPose * v;
+                avscan::core::LidarPointXYZIRT pw = p;
+                pw.x = vw.x; pw.y = vw.y; pw.z = vw.z;
+                combined.push_back(pw);
+            }
+            return combined;
+        }
+        return statPts;
+    }
     return _cachedGlobalCloud;
 }
 
@@ -655,20 +672,34 @@
     BOOL ok = _stationManager->finalizeAndSaveStation(err) ? YES : NO;
     if (ok) {
         std::lock_guard<std::mutex> lock(_stateMutex);
+        auto statCloud = _stationManager->buildStationPointCloud();
         if (_isSlamPausedForStation) {
             // Create high-weight anchor keyframe in SLAM pose graph
             avscan::core::KeyframeSubmap anchorSubmap;
             anchorSubmap.keyframe_id = _nextKeyframeId++;
             anchorSubmap.timestamp_sec = CACurrentMediaTime();
             anchorSubmap.T_world_keyframe = _flashStationAnchorPose;
-            anchorSubmap.local_points = _stationManager->buildStationPointCloud();
+            anchorSubmap.local_points = statCloud;
 
             _projectStore.appendKeyframeToWal(anchorSubmap);
             _poseGraph.addKeyframeSubmap(anchorSubmap);
 
+            _cachedGlobalCloud = _poseGraph.buildGloballyConsistentPointCloud(2);
+            _latestFloorPlan = avscan::quality::QualityMonitor::generateLiveFloorPlan(
+                _cachedGlobalCloud, _poseGraph.getSubmaps(), _poseGraph.getFactors(), 0.08);
+
             [self resumeSlamAfterFlashStation];
         } else {
-            _cachedGlobalCloud = _stationManager->buildStationPointCloud();
+            _cachedGlobalCloud = statCloud;
+            std::vector<avscan::core::KeyframeSubmap> stSubmaps;
+            avscan::core::KeyframeSubmap sm;
+            sm.keyframe_id = 1;
+            sm.T_world_keyframe = avscan::math::SE3d::Identity();
+            sm.local_points = statCloud;
+            stSubmaps.push_back(sm);
+            std::vector<avscan::backend::PoseGraphFactor> emptyFactors;
+            _latestFloorPlan = avscan::quality::QualityMonitor::generateLiveFloorPlan(
+                _cachedGlobalCloud, stSubmaps, emptyFactors, 0.08);
             _isTerrestrialStationActive = NO;
         }
     }
@@ -687,12 +718,24 @@
     return _stationManager ? _stationManager->getCurrentStopIndex() : 0;
 }
 
+- (size_t)completedTerrestrialStopCount {
+    return _stationManager ? _stationManager->getCompletedStops().size() : 0;
+}
+
 - (double)terrestrialAccumulationProgress {
     return _stationManager ? _stationManager->getCurrentAccumulationProgress() : 0.0;
 }
 
 - (BOOL)isTerrestrialStationary {
     return _stationManager ? (_stationManager->isStationary() ? YES : NO) : NO;
+}
+
+- (avscan::terrestrial::TerrestrialCaptureState)currentTerrestrialCaptureState {
+    return _stationManager ? _stationManager->getCaptureState() : avscan::terrestrial::TerrestrialCaptureState::IDLE;
+}
+
+- (avscan::terrestrial::TerrestrialStationMetadata)currentTerrestrialStationMetadata {
+    return _stationManager ? _stationManager->getStationMetadata() : avscan::terrestrial::TerrestrialStationMetadata{};
 }
 
 @end
