@@ -345,7 +345,9 @@
 - (void)onStartStopTapped {
     if (_bridge.acquisitionMode == AVScanAcquisitionModeTerrestrial) {
         if (!_bridge.isTerrestrialStationActive) {
-            [_bridge startTerrestrialStationWithId:@"st_001" name:@"Station 01" stepDeg:60.0 isFlashDuringSlam:NO];
+            NSString *stId = [_bridge nextAvailableStationIdWithPrefix:@"st"];
+            NSString *stName = [NSString stringWithFormat:@"Station %@", [stId stringByReplacingOccurrencesOfString:@"st_" withString:@""]];
+            [_bridge startTerrestrialStationWithId:stId name:stName stepDeg:60.0 isFlashDuringSlam:NO];
             [_startStopBtn setTitle:@"Next Stop 60°" forState:UIControlStateNormal];
             _startStopBtn.backgroundColor = [[AppleGlassTheme statusCyan] colorWithAlphaComponent:0.40];
             _startStopBtn.layer.borderColor = [AppleGlassTheme statusCyan].CGColor;
@@ -378,7 +380,7 @@
         // Dynamic Hybrid Flash Station during active SLAM!
         [self promptMotorConnectionVerificationWithCompletion:^(BOOL confirmed) {
             if (confirmed) {
-                NSString *stId = [NSString stringWithFormat:@"flash_st_%03u", arc4random_uniform(900) + 100];
+                NSString *stId = [self->_bridge nextAvailableStationIdWithPrefix:@"flash_st"];
                 [self->_bridge startTerrestrialStationWithId:stId name:@"Hybrid Flash Station" stepDeg:60.0 isFlashDuringSlam:YES];
                 [self->_poiPhotoBtn setTitle:@"Step 60°" forState:UIControlStateNormal];
             }

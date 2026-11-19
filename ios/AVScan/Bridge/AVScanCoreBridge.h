@@ -67,6 +67,7 @@ typedef NS_ENUM(NSInteger, AVMotorVerificationStatus) {
 - (void)detectAndApplyHostDeviceProfile;
 
 // Terrestrial Station Mode (Mode B) & Hybrid Flash Station during SLAM
+- (NSString *)nextAvailableStationIdWithPrefix:(NSString *)prefix;
 - (BOOL)confirmMotorAttachedWithAutomatic:(BOOL)isAuto model:(NSString *)motorModel;
 - (BOOL)startTerrestrialStationWithId:(NSString *)stationId name:(NSString *)stationName stepDeg:(double)stepDeg isFlashDuringSlam:(BOOL)isFlash;
 - (BOOL)beginTerrestrialStop;

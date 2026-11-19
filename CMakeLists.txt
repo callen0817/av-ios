@@ -131,4 +131,8 @@ if(AVSCAN_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_executable(avscan_autocalib_test tests/test_online_auto_calibrator.cpp)
     target_link_libraries(avscan_autocalib_test PRIVATE avscan_core)
     add_test(NAME OnlineAutoCalibratorTest COMMAND avscan_autocalib_test)
+
+    add_executable(avscan_terrestrial_test tests/test_terrestrial_mode.cpp)
+    target_link_libraries(avscan_terrestrial_test PRIVATE avscan_core)
+    add_test(NAME TerrestrialModeTest COMMAND avscan_terrestrial_test)
 endif()

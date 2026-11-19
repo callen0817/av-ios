@@ -144,67 +144,111 @@ bool AvSpatialBundleExporter::exportFloorKeyplanPng(const std::string& out_png_p
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
 
-    // If no cells, write minimal placeholder file
-    int width = std::max(16, plan.width_cells);
-    int height = std::max(16, plan.height_cells);
+    const uint32_t width = static_cast<uint32_t>(std::max(16, plan.width_cells));
+    const uint32_t height = static_cast<uint32_t>(std::max(16, plan.height_cells));
 
-    // Write simple PPM/PGM or uncompressed bitmap fallback if libpng is not loaded
-    // Standard AV Showcase accepts 2D keyplans with metadata
-    std::ofstream out(out_png_path, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) return false;
+    // Build raw RGB scanlines: 1 filter byte (0=None) + width * 3 bytes per row
+    const size_t row_bytes = 1 + static_cast<size_t>(width) * 3;
+    std::vector<uint8_t> raw(row_bytes * height, 0);
 
-    // Simple valid uncompressed grayscale BMP image with .png extension accepted by web viewers
-    // or standard raw byte buffer
-    uint32_t row_padded = (width + 3) & (~3);
-    uint32_t image_size = row_padded * height;
-    uint32_t file_size = 54 + 1024 + image_size;
-
-    uint8_t bmp_hdr[54] = {
-        'B', 'M',
-        static_cast<uint8_t>(file_size & 0xFF), static_cast<uint8_t>((file_size >> 8) & 0xFF),
-        static_cast<uint8_t>((file_size >> 16) & 0xFF), static_cast<uint8_t>((file_size >> 24) & 0xFF),
-        0, 0, 0, 0,
-        54 + 4, 4, 0, 0, // offset
-        40, 0, 0, 0,     // DIB header size
-        static_cast<uint8_t>(width & 0xFF), static_cast<uint8_t>((width >> 8) & 0xFF),
-        static_cast<uint8_t>((width >> 16) & 0xFF), static_cast<uint8_t>((width >> 24) & 0xFF),
-        static_cast<uint8_t>(height & 0xFF), static_cast<uint8_t>((height >> 8) & 0xFF),
-        static_cast<uint8_t>((height >> 16) & 0xFF), static_cast<uint8_t>((height >> 24) & 0xFF),
-        1, 0, 8, 0,      // 1 plane, 8-bit
-        0, 0, 0, 0,      // no compression
-        static_cast<uint8_t>(image_size & 0xFF), static_cast<uint8_t>((image_size >> 8) & 0xFF),
-        static_cast<uint8_t>((image_size >> 16) & 0xFF), static_cast<uint8_t>((image_size >> 24) & 0xFF),
-        0x13, 0x0B, 0, 0, // 2835 ppm (72 dpi)
-        0x13, 0x0B, 0, 0,
-        0, 1, 0, 0,      // 256 colors
-        0, 0, 0, 0
-    };
-    out.write(reinterpret_cast<const char*>(bmp_hdr), 54);
-
-    // Color palette: 256 entries
-    for (int i = 0; i < 256; ++i) {
-        uint8_t b = static_cast<uint8_t>(i);
-        uint8_t g = static_cast<uint8_t>(i);
-        uint8_t r = static_cast<uint8_t>(i);
-        uint8_t a = 0;
-        if (i == 2) { r = 229; g = 201; b = 131; } // wall = gold
-        else if (i == 1) { r = 20; g = 22; b = 30; } // free space = dark
-        out.write(reinterpret_cast<const char*>(&b), 1);
-        out.write(reinterpret_cast<const char*>(&g), 1);
-        out.write(reinterpret_cast<const char*>(&r), 1);
-        out.write(reinterpret_cast<const char*>(&a), 1);
+    for (uint32_t y = 0; y < height; ++y) {
+        uint8_t* dst = raw.data() + static_cast<size_t>(y) * row_bytes;
+        dst[0] = 0; // PNG filter type 0 (None)
+        // Flip Y so +Y world is top of image
+        int src_y = static_cast<int>(height - 1 - y);
+        for (uint32_t x = 0; x < width; ++x) {
+            uint8_t occ = 0;
+            if (src_y >= 0 && src_y < plan.height_cells &&
+                static_cast<int>(x) < plan.width_cells &&
+                !plan.occupancy_cells.empty()) {
+                occ = plan.occupancy_cells[static_cast<size_t>(src_y) * plan.width_cells + x];
+            }
+            uint8_t r = 10, g = 12, b = 16; // unknown = obsidian
+            if (occ == 2) { r = 229; g = 201; b = 131; }      // wall = AV gold
+            else if (occ == 1) { r = 24; g = 28; b = 38; }    // free space = dark slate
+            dst[1 + x * 3 + 0] = r;
+            dst[1 + x * 3 + 1] = g;
+            dst[1 + x * 3 + 2] = b;
+        }
     }
 
-    std::vector<uint8_t> row_buf(row_padded, 0);
-    for (int y = 0; y < height; ++y) {
-        std::fill(row_buf.begin(), row_buf.end(), 0);
-        if (y < plan.height_cells && !plan.occupancy_cells.empty()) {
-            for (int x = 0; x < width && x < plan.width_cells; ++x) {
-                row_buf[x] = plan.occupancy_cells[y * plan.width_cells + x];
+    auto appendBe32 = [](std::vector<uint8_t>& buf, uint32_t v) {
+        buf.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
+        buf.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
+        buf.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+        buf.push_back(static_cast<uint8_t>(v & 0xFF));
+    };
+
+    auto crc32 = [](const uint8_t* data, size_t len) -> uint32_t {
+        uint32_t c = 0xFFFFFFFFu;
+        for (size_t i = 0; i < len; ++i) {
+            c ^= data[i];
+            for (int k = 0; k < 8; ++k) {
+                c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
             }
         }
-        out.write(reinterpret_cast<const char*>(row_buf.data()), row_padded);
+        return c ^ 0xFFFFFFFFu;
+    };
+
+    auto appendChunk = [&](std::vector<uint8_t>& out_buf, const char type[4], const std::vector<uint8_t>& data) {
+        appendBe32(out_buf, static_cast<uint32_t>(data.size()));
+        size_t type_start = out_buf.size();
+        out_buf.insert(out_buf.end(), type, type + 4);
+        out_buf.insert(out_buf.end(), data.begin(), data.end());
+        uint32_t crc = crc32(out_buf.data() + type_start, 4 + data.size());
+        appendBe32(out_buf, crc);
+    };
+
+    // Wrap raw scanlines in RFC 1950 zlib stream with uncompressed DEFLATE stored blocks
+    std::vector<uint8_t> zlib_data;
+    zlib_data.reserve(raw.size() + 64);
+    zlib_data.push_back(0x78); // CMF: Deflate, 32K window
+    zlib_data.push_back(0x01); // FLG: no dict, check bits valid (0x7801 % 31 == 0)
+
+    size_t offset = 0;
+    const size_t max_block = 65535;
+    while (offset < raw.size()) {
+        size_t chunk_len = std::min(max_block, raw.size() - offset);
+        bool is_final = (offset + chunk_len >= raw.size());
+        zlib_data.push_back(is_final ? 0x01 : 0x00);
+        uint16_t len16 = static_cast<uint16_t>(chunk_len);
+        uint16_t nlen16 = static_cast<uint16_t>(~len16);
+        zlib_data.push_back(static_cast<uint8_t>(len16 & 0xFF));
+        zlib_data.push_back(static_cast<uint8_t>((len16 >> 8) & 0xFF));
+        zlib_data.push_back(static_cast<uint8_t>(nlen16 & 0xFF));
+        zlib_data.push_back(static_cast<uint8_t>((nlen16 >> 8) & 0xFF));
+        zlib_data.insert(zlib_data.end(), raw.begin() + offset, raw.begin() + offset + chunk_len);
+        offset += chunk_len;
     }
+
+    // Adler-32 over raw scanlines
+    uint32_t s1 = 1, s2 = 0;
+    for (uint8_t byte : raw) {
+        s1 = (s1 + byte) % 65521u;
+        s2 = (s2 + s1) % 65521u;
+    }
+    appendBe32(zlib_data, (s2 << 16) | s1);
+
+    // Assemble complete PNG byte stream
+    std::vector<uint8_t> png;
+    static const uint8_t kPngSig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    png.insert(png.end(), kPngSig, kPngSig + 8);
+
+    std::vector<uint8_t> ihdr;
+    appendBe32(ihdr, width);
+    appendBe32(ihdr, height);
+    ihdr.push_back(8); // bit depth
+    ihdr.push_back(2); // color type: Truecolor RGB
+    ihdr.push_back(0); // compression
+    ihdr.push_back(0); // filter
+    ihdr.push_back(0); // interlace
+    appendChunk(png, "IHDR", ihdr);
+    appendChunk(png, "IDAT", zlib_data);
+    appendChunk(png, "IEND", {});
+
+    std::ofstream out(out_png_path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) return false;
+    out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
     return out.good();
 }
 

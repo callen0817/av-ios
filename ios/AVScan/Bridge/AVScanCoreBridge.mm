@@ -35,6 +35,8 @@
     BOOL _isSlamPausedForStation;
     avscan::math::SE3d _flashStationAnchorPose;
     AVMotorVerificationStatus _motorVerificationStatus;
+    NSString *_activeTerrestrialStationId;
+    int32_t _lastCapturedRgbStopIndex;
 
     std::atomic<bool> _workerRunning;
     std::thread _slamWorkerThread;
@@ -106,7 +108,55 @@
     [_cameraManager setFrameCallback:[weakSelf](const avscan::core::RgbFrame &rgbFrame) {
         AVScanCoreBridge *strongSelf = weakSelf;
         if (!strongSelf) return;
-        strongSelf->_synchronizer.pushRgbFrame(rgbFrame);
+        if (!strongSelf->_isTerrestrialStationActive) {
+            strongSelf->_synchronizer.pushRgbFrame(rgbFrame);
+            return;
+        }
+        // Per-stop RGB capture during stationary Terrestrial / Hybrid Flash accumulation
+        if (strongSelf->_stationManager &&
+            strongSelf->_stationManager->getCaptureState() == avscan::terrestrial::TerrestrialCaptureState::ACCUMULATING_STOP &&
+            !rgbFrame.rgb_bytes.empty() && rgbFrame.intrinsics.width > 0 && rgbFrame.intrinsics.height > 0) {
+            int32_t stopIdx = static_cast<int32_t>(strongSelf->_stationManager->getCurrentStopIndex());
+            if (strongSelf->_lastCapturedRgbStopIndex != stopIdx) {
+                strongSelf->_lastCapturedRgbStopIndex = stopIdx;
+                NSString *stId = strongSelf->_activeTerrestrialStationId ?: @"st_001";
+                NSString *relPath = [NSString stringWithFormat:@"raw/images/stop_%03d.jpg", stopIdx];
+                NSString *absPath = [[strongSelf->_activeProjectDir
+                    stringByAppendingPathComponent:[NSString stringWithFormat:@"stations/%@", stId]]
+                    stringByAppendingPathComponent:relPath];
+
+                // Convert RGB24 buffer to JPEG via CoreGraphics/UIKit
+                size_t w = static_cast<size_t>(rgbFrame.intrinsics.width);
+                size_t h = static_cast<size_t>(rgbFrame.intrinsics.height);
+                std::vector<uint8_t> rgba(w * h * 4, 255);
+                for (size_t i = 0; i < w * h; ++i) {
+                    rgba[i * 4 + 0] = rgbFrame.rgb_bytes[i * 3 + 0];
+                    rgba[i * 4 + 1] = rgbFrame.rgb_bytes[i * 3 + 1];
+                    rgba[i * 4 + 2] = rgbFrame.rgb_bytes[i * 3 + 2];
+                }
+                CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+                CGContextRef ctx = CGBitmapContextCreate(
+                    rgba.data(), w, h, 8, w * 4, cs,
+                    kCGImageAlphaNoneSkipLast | kCGBitmapByteOrder32Big);
+                if (ctx) {
+                    CGImageRef cgImg = CGBitmapContextCreateImage(ctx);
+                    if (cgImg) {
+                        UIImage *uiImg = [UIImage imageWithCGImage:cgImg];
+                        NSData *jpegData = UIImageJPEGRepresentation(uiImg, 0.90);
+                        if (jpegData) {
+                            [[NSFileManager defaultManager] createDirectoryAtPath:[absPath stringByDeletingLastPathComponent]
+                                                      withIntermediateDirectories:YES attributes:nil error:nil];
+                            if ([jpegData writeToFile:absPath atomically:YES]) {
+                                strongSelf->_stationManager->pushCameraImage(relPath.UTF8String);
+                            }
+                        }
+                        CGImageRelease(cgImg);
+                    }
+                    CGContextRelease(ctx);
+                }
+                CGColorSpaceRelease(cs);
+            }
+        }
     } diagnosticPoseCallback:[weakSelf](double timestampSec, const avscan::math::SE3d &pose) {
         AVScanCoreBridge *strongSelf = weakSelf;
         if (!strongSelf || !strongSelf->_autoCalibActive.load()) return;
@@ -587,6 +637,23 @@
 
 #pragma mark - Terrestrial Mode Implementation (Mode B) & Hybrid Flash Station
 
+- (NSString *)nextAvailableStationIdWithPrefix:(NSString *)prefix {
+    NSString *pfx = (prefix.length > 0) ? prefix : @"st";
+    if (!_activeProjectDir) {
+        [self createOrOpenProjectWithId:@"PROJECT_001" name:@"AV Terrestrial Session"];
+    }
+    NSString *stationsRoot = [_activeProjectDir stringByAppendingPathComponent:@"stations"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (int idx = 1; idx <= 999; ++idx) {
+        NSString *candidate = [NSString stringWithFormat:@"%@_%03d", pfx, idx];
+        NSString *path = [stationsRoot stringByAppendingPathComponent:candidate];
+        if (![fm fileExistsAtPath:path]) {
+            return candidate;
+        }
+    }
+    return [NSString stringWithFormat:@"%@_%llu", pfx, (unsigned long long)time(NULL)];
+}
+
 - (BOOL)confirmMotorAttachedWithAutomatic:(BOOL)isAuto model:(NSString *)motorModel {
     _motorVerificationStatus = isAuto ? AVMotorVerificationStatusAutomaticConnected
                                       : AVMotorVerificationStatusManualConfirmed;
@@ -612,25 +679,43 @@
         [self createOrOpenProjectWithId:@"PROJECT_001" name:@"AV Terrestrial Session"];
     }
 
+    NSString *resolvedId = (stationId.length > 0) ? stationId : [self nextAvailableStationIdWithPrefix:(isFlash ? @"flash_st" : @"st")];
+    _activeTerrestrialStationId = [resolvedId copy];
+    _lastCapturedRgbStopIndex = -1;
+
     avscan::terrestrial::TerrestrialStationConfig config;
     config.project_id = _activeProjectId ? _activeProjectId.UTF8String : "PROJ_001";
-    config.station_id = stationId ? stationId.UTF8String : "st_001";
-    config.station_name = stationName ? stationName.UTF8String : "Station 01";
+    config.station_id = resolvedId.UTF8String;
+    config.station_name = stationName ? stationName.UTF8String : resolvedId.UTF8String;
     config.nominal_step_deg = (stepDeg > 5.0) ? stepDeg : 60.0;
     config.total_expected_stops = static_cast<size_t>(std::round(360.0 / config.nominal_step_deg));
     config.accumulation_sec_per_stop = 5.0;
 
+    // Respect live/calibrated extrinsics for variable detachable mounts rather than overwriting with static defaults
     auto mountProfile = avscan::core::DeviceProfileRegistry::instance().activeProfile();
+    {
+        std::lock_guard<std::mutex> lock(_stateMutex);
+        if (_calibProfile.verified || _calibProfile.confidence_score > 0.0) {
+            mountProfile.T_cam_lidar = _calibProfile.T_cam_lidar;
+            mountProfile.camera_time_offset_sec = _calibProfile.camera_time_offset_sec;
+        }
+    }
+
     _stationManager = std::make_unique<avscan::terrestrial::TerrestrialStationManager>(config);
     _stationManager->startNewStation(_activeProjectDir.UTF8String, config, mountProfile);
 
     _udpReceiver->start();
+    if (!_isSlamPausedForStation) {
+        // Start camera for per-stop RGB frames (non-blocking if unavailable)
+        [_cameraManager startCaptureWithMode:AVCameraAcquisitionModeAVFoundationPure];
+    }
     _isTerrestrialStationActive = YES;
     return YES;
 }
 
 - (BOOL)beginTerrestrialStop {
     if (!_stationManager) return NO;
+    _lastCapturedRgbStopIndex = -1;
     return _stationManager->beginCurrentStopAccumulation() ? YES : NO;
 }
 
@@ -663,6 +748,7 @@
 
 - (BOOL)repeatCurrentTerrestrialStop {
     if (!_stationManager) return NO;
+    _lastCapturedRgbStopIndex = -1;
     return _stationManager->repeatCurrentStop() ? YES : NO;
 }
 
@@ -701,6 +787,7 @@
             _latestFloorPlan = avscan::quality::QualityMonitor::generateLiveFloorPlan(
                 _cachedGlobalCloud, stSubmaps, emptyFactors, 0.08);
             _isTerrestrialStationActive = NO;
+            [_cameraManager stopCapture];
         }
     }
     return ok;
