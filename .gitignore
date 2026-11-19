@@ -87,3 +87,11 @@ desktop.ini
 *.bak
 *.swp
 *.swo
+
+# Signing secrets
+certs/
+*.p12
+*.key
+*.mobileprovision
+*.certSigningRequest
+*.cer
