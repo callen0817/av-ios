@@ -56,8 +56,11 @@ if ($LASTEXITCODE -ne 0) {
 
 Copy-Item (Join-Path $RepoRoot "ios\AVScan\Info.plist") (Join-Path $AppBundleDir "Info.plist") -Force
 Copy-Item (Join-Path $RepoRoot "ios\AVScan\Rendering\Shaders.metal") (Join-Path $AppBundleDir "Shaders.metal") -Force
-if (Test-Path (Join-Path $RepoRoot "ios\AVScan\Assets\av_logo.png")) {
-    Copy-Item (Join-Path $RepoRoot "ios\AVScan\Assets\av_logo.png") (Join-Path $AppBundleDir "av_logo.png") -Force
+$AssetsDir = Join-Path $RepoRoot "ios\AVScan\Assets"
+if (Test-Path $AssetsDir) {
+    Get-ChildItem -Path $AssetsDir -Filter "*.png" | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $AppBundleDir $_.Name) -Force
+    }
 }
 
 $BuiltExe = Join-Path $IosBuildDir "AVScan.app\AVScan"

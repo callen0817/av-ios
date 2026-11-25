@@ -20,6 +20,36 @@
     <string>1.0.0</string>
     <key>CFBundleVersion</key>
     <string>100</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon1024x1024.png</string>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+                <string>AppIcon1024x1024</string>
+            </array>
+            <key>UIPrerenderedIcon</key>
+            <true/>
+        </dict>
+    </dict>
+    <key>CFBundleIcons~ipad</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+                <string>AppIcon76x76</string>
+                <string>AppIcon83.5x83.5</string>
+                <string>AppIcon1024x1024</string>
+            </array>
+            <key>UIPrerenderedIcon</key>
+            <true/>
+        </dict>
+    </dict>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UIDeviceFamily</key>
@@ -46,7 +76,9 @@
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
     <key>NSCameraUsageDescription</key>
-    <string>AV Scan uses the camera for real-time LiDAR-visual-inertial SLAM fusion, point-cloud RGB colorization, and targetless sensor calibration.</string>
+    <string>AV Scan uses the built-in or external USB-C camera (such as the ScanAR Orbbec Gemini 336L) for real-time LiDAR-visual-inertial SLAM fusion, point-cloud RGB colorization, and targetless sensor calibration.</string>
+    <key>NSCameraUseExternalDeviceType</key>
+    <true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>AV Scan communicates over wired USB-C Ethernet with the RoboSense Airy LiDAR sensor (192.168.1.200) on UDP ports 6699, 7788, and 6688.</string>
     <key>UIFileSharingEnabled</key>
