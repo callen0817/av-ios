@@ -26,7 +26,7 @@ VoxelKey VoxelHashMap::pointToKey(const math::Vec3d& p) const {
 
 void VoxelHashMap::recomputePlaneParameters(VoxelPlaneNode& node) {
     node.dirty = false;
-    if (node.points.size() < 5) {
+    if (node.points.empty()) {
         node.is_valid_plane = false;
         return;
     }
@@ -37,6 +37,11 @@ void VoxelHashMap::recomputePlaneParameters(VoxelPlaneNode& node) {
     }
     mean /= static_cast<double>(node.points.size());
     node.mean = mean;
+
+    if (node.points.size() < 5) {
+        node.is_valid_plane = false;
+        return;
+    }
 
     math::Mat3d cov = math::Mat3d::Zero();
     for (const auto& p : node.points) {
@@ -55,8 +60,8 @@ void VoxelHashMap::recomputePlaneParameters(VoxelPlaneNode& node) {
     node.normal = math::Vec3d(eig.eigenvectors(0, 0), eig.eigenvectors(1, 0), eig.eigenvectors(2, 0)).normalized();
     node.d_coeff = -node.normal.dot(node.mean);
 
-    // Planarity: require smallest eigenvalue << second eigenvalue, and second eigenvalue non-degenerate
-    if (l1 > 1e-4 && l0 < 0.08 * l1 && l0 < 0.0025) {
+    // Planarity: require smallest eigenvalue << second eigenvalue, and thickness < 0.005 m^2 (av-scanar robosense.yaml)
+    if (l1 > 1e-4 && l0 < 0.10 * l1 && l0 < 0.005) {
         node.planarity = std::clamp(1.0 - (l0 / l1), 0.0, 1.0);
         node.is_valid_plane = true;
     } else {
@@ -66,6 +71,9 @@ void VoxelHashMap::recomputePlaneParameters(VoxelPlaneNode& node) {
 }
 
 void VoxelHashMap::insertPoints(const std::vector<core::LidarPointXYZIRT>& world_points, uint64_t frame_id) {
+    std::vector<VoxelKey> dirty_keys;
+    dirty_keys.reserve(std::min<size_t>(world_points.size(), 4096));
+
     for (const auto& pt : world_points) {
         math::Vec3d pw(pt.x, pt.y, pt.z);
         VoxelKey key = pointToKey(pw);
@@ -77,21 +85,25 @@ void VoxelHashMap::insertPoints(const std::vector<core::LidarPointXYZIRT>& world
             // Check minimum inter-point distance inside voxel to prevent redundant clustering
             bool too_close = false;
             for (const auto& existing : node.points) {
-                if ((existing - pw).squaredNorm() < 0.0004) {  // 2 cm threshold
+                if ((existing - pw).squaredNorm() < 0.0009) {  // 3 cm spacing inside 0.5 m voxel
                     too_close = true;
                     break;
                 }
             }
             if (!too_close) {
                 node.points.push_back(pw);
-                node.dirty = true;
+                if (!node.dirty) {
+                    node.dirty = true;
+                    dirty_keys.push_back(key);
+                }
             }
         }
     }
 
-    for (auto& kv : voxels_) {
-        if (kv.second.dirty) {
-            recomputePlaneParameters(kv.second);
+    for (const auto& key : dirty_keys) {
+        auto it = voxels_.find(key);
+        if (it != voxels_.end() && it->second.dirty) {
+            recomputePlaneParameters(it->second);
         }
     }
 }

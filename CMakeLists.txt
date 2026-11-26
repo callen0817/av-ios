@@ -20,6 +20,9 @@ set(AVSCAN_CORE_SOURCES
     src/sensors/AiryDiscovery.cpp
     src/sensors/AiryDecoder.cpp
     src/sensors/AiryUdpReceiver.cpp
+    src/sensors/DepthProviderRegistry.cpp
+    src/cslam/CollaborativeSlamEngine.cpp
+    src/cslam/CollaborativeTransport.cpp
     src/sync/TimeSynchronizer.cpp
     src/slam/VoxelHashMap.cpp
     src/slam/FastLivo2Engine.cpp
@@ -29,6 +32,7 @@ set(AVSCAN_CORE_SOURCES
     src/backend/GicpVerifier.cpp
     src/backend/PoseGraphOptimizer.cpp
     src/quality/QualityMonitor.cpp
+    src/processing/PointCloudCleanup.cpp
     src/storage/ProjectStore.cpp
     src/export/PointCloudExporter.cpp
     src/export/AvSpatialBundleExporter.cpp
@@ -62,6 +66,7 @@ if(AVSCAN_BUILD_IOS_APP)
         ios/AVScan/AppDelegate.mm
         ios/AVScan/Bridge/AVScanCoreBridge.mm
         ios/AVScan/Sensors/CameraCaptureManager.mm
+        ios/AVScan/Sensors/MultipeerCollabTransport.mm
         ios/AVScan/Rendering/MetalPointCloudRenderer.mm
         ios/AVScan/UI/MainScannerViewController.mm
         ios/AVScan/UI/DiagnosticsViewController.mm
@@ -94,6 +99,7 @@ if(AVSCAN_BUILD_IOS_APP)
         "-framework CoreGraphics"
         "-framework QuartzCore"
         "-framework Network"
+        "-framework MultipeerConnectivity"
         "-framework SystemConfiguration"
         "-framework UniformTypeIdentifiers"
         "-lsqlite3"
@@ -135,4 +141,13 @@ if(AVSCAN_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_executable(avscan_terrestrial_test tests/test_terrestrial_mode.cpp)
     target_link_libraries(avscan_terrestrial_test PRIVATE avscan_core)
     add_test(NAME TerrestrialModeTest COMMAND avscan_terrestrial_test)
+
+    add_executable(avscan_cslam_depth_test tests/test_cslam_and_depth.cpp)
+    target_link_libraries(avscan_cslam_depth_test PRIVATE avscan_core)
+    add_test(NAME CslamAndDepthTest COMMAND avscan_cslam_depth_test)
+
+    add_executable(avscan_live_regression_test tests/test_live_scan_regression.cpp)
+    target_link_libraries(avscan_live_regression_test PRIVATE avscan_core)
+    target_compile_definitions(avscan_live_regression_test PRIVATE AVSCAN_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME LiveScanRegressionTest COMMAND avscan_live_regression_test)
 endif()

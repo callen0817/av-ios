@@ -27,11 +27,21 @@
 
     auto cfg = [_bridge currentNetworkConfig];
 
-    UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectInset(self.view.bounds, 20, 72)];
+    UIStackView *stack = [[UIStackView alloc] init];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 10.0;
-    stack.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    stack.alignment = UIStackViewAlignmentFill;
+    stack.distribution = UIStackViewDistributionFill;
     [self.view addSubview:stack];
+
+    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.topAnchor constraintEqualToAnchor:safe.topAnchor constant:16.0],
+        [stack.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:20.0],
+        [stack.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-20.0],
+        [stack.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-16.0]
+    ]];
 
     _sensorIpField = [self makeFieldWithPlaceholder:@"Airy IP" text:[NSString stringWithUTF8String:cfg.sensor_ip.c_str()]];
     _hostIpField = [self makeFieldWithPlaceholder:@"iOS Ethernet IP" text:[NSString stringWithUTF8String:cfg.host_expected_ip.c_str()]];
@@ -39,15 +49,15 @@
     _difopPortField = [self makeFieldWithPlaceholder:@"DIFOP UDP Port" text:[NSString stringWithFormat:@"%u", cfg.difop_port]];
     _imuPortField = [self makeFieldWithPlaceholder:@"IMU UDP Port" text:[NSString stringWithFormat:@"%u", cfg.imu_port]];
 
-    [stack addArrangedSubview:_sensorIpField];
-    [stack addArrangedSubview:_hostIpField];
-    [stack addArrangedSubview:_msopPortField];
-    [stack addArrangedSubview:_difopPortField];
-    [stack addArrangedSubview:_imuPortField];
+    for (UITextField *tf in @[_sensorIpField, _hostIpField, _msopPortField, _difopPortField, _imuPortField]) {
+        [tf.heightAnchor constraintEqualToConstant:36.0].active = YES;
+        [stack addArrangedSubview:tf];
+    }
 
     UIButton *probeBtn = [AppleGlassTheme createGlassButtonWithTitle:@"Run Gate 1 & Gate 2 Airy Hardware Probe"
                                                            baseColor:[AppleGlassTheme goldPrimary]
                                                         cornerRadius:10.0];
+    [probeBtn.heightAnchor constraintEqualToConstant:46.0].active = YES;
     [probeBtn addTarget:self action:@selector(onRunProbeTapped) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:probeBtn];
 

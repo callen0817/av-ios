@@ -80,7 +80,14 @@
     <key>NSCameraUseExternalDeviceType</key>
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>AV Scan communicates over wired USB-C Ethernet with the RoboSense Airy LiDAR sensor (192.168.1.200) on UDP ports 6699, 7788, and 6688.</string>
+    <string>AV Scan communicates over wired USB-C Ethernet with the RoboSense Airy LiDAR sensor (192.168.1.200) and discovers nearby C-SLAM devices (iOS, Jetson, Windows) over Wi-Fi for real-time collaborative mapping.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>AV Scan uses Bluetooth for peer-to-peer C-SLAM device discovery and motorized terrestrial head control.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_avcslam._tcp</string>
+        <string>_avcslam._udp</string>
+    </array>
     <key>UIFileSharingEnabled</key>
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>

@@ -81,8 +81,15 @@ bool TerrestrialStationManager::startNewStation(const std::string& project_dir,
     fs::create_directories(fs::path(station_dir_) / "cache", ec);
     fs::create_directories(fs::path(station_dir_) / "pano", ec);
 
+    if (config_.is_single_shot_flash) {
+        // Single-shot Flash Scan: 1 stationary accumulation pose in IMU body frame, zero turntable/motor interaction
+        config_.total_expected_stops = 1;
+        config_.nominal_step_deg = 360.0;
+        config_.enable_overlap_refinement = false;
+    } else {
+        rotation_ctrl_->setZeroPosition();
+    }
     state_ = TerrestrialCaptureState::WAITING_FOR_STILLNESS;
-    rotation_ctrl_->setZeroPosition();
     return true;
 }
 
@@ -197,9 +204,15 @@ bool TerrestrialStationManager::finishCurrentStopLocked() {
     obs.timestamp_start_sec = stop_start_time_sec_;
     obs.timestamp_end_sec = latest_frame_end_sec_;
 
-    // Transform from LiDAR sensor frame to Station frame
-    obs.T_station_lidar = RotationGeometry::computeStationLidarTransform(
-        obs.measured_angle_deg, mount_profile_.T_cam_lidar, axis_calib_);
+    // Transform from LiDAR sensor frame:
+    //  - Single-shot Flash Scan: exact IMU body frame (T_imu_lidar) to lock cleanly into active SLAM pose graph
+    //  - Terrestrial Mode (Mode B): tripod station frame via RotationGeometry
+    if (config_.is_single_shot_flash) {
+        obs.T_station_lidar = config_.T_imu_lidar;
+    } else {
+        obs.T_station_lidar = RotationGeometry::computeStationLidarTransform(
+            obs.measured_angle_deg, mount_profile_.T_cam_lidar, axis_calib_);
+    }
 
     obs.stationary_points = current_stop_points_;
     obs.rgb_image_relpath = current_stop_image_path_;
@@ -220,7 +233,9 @@ bool TerrestrialStationManager::finishCurrentStopLocked() {
 
     stops_.push_back(std::move(obs));
     current_stop_points_.clear();
-    state_ = TerrestrialCaptureState::STOP_COMPLETED;
+    state_ = config_.is_single_shot_flash
+        ? TerrestrialCaptureState::STATION_COMPLETED
+        : TerrestrialCaptureState::STOP_COMPLETED;
     return true;
 }
 
@@ -460,7 +475,7 @@ bool TerrestrialStationManager::writeStationArtifactsLocked(std::string& out_err
     json << "  \"project_id\": \"" << config_.project_id << "\",\n";
     json << "  \"station_id\": \"" << config_.station_id << "\",\n";
     json << "  \"name\": \"" << config_.station_name << "\",\n";
-    json << "  \"mode\": \"terrestrial\",\n";
+    json << "  \"mode\": \"" << (config_.is_single_shot_flash ? "flash_scan" : "terrestrial") << "\",\n";
     json << "  \"created_utc\": \"" << now_utc << "\",\n";
     json << "  \"hardware_profile\": {\n";
     json << "    \"app\": \"AV Scan iOS\",\n";
@@ -476,7 +491,7 @@ bool TerrestrialStationManager::writeStationArtifactsLocked(std::string& out_err
     json << "    \"units\": \"meters\"\n";
     json << "  },\n";
     json << "  \"rotation_spec\": {\n";
-    json << "    \"mode\": \"manual\",\n";
+    json << "    \"mode\": \"" << (config_.is_single_shot_flash ? "none_stationary" : "manual") << "\",\n";
     json << "    \"nominal_increment_deg\": " << config_.nominal_step_deg << ",\n";
     json << "    \"total_stops\": " << stops_.size() << ",\n";
     json << "    \"expected_stops\": " << config_.total_expected_stops << ",\n";
@@ -546,8 +561,10 @@ bool TerrestrialStationManager::finalizeAndSaveStation(std::string& out_error) {
     // Write all station artifacts (station_manifest.json, pointcloud.ply, station.e57, cache/lod0.bin)
     writeStationArtifactsLocked(out_error);
 
-    // Return motor to starting zero position safely (unwinds cable)
-    rotation_ctrl_->setZeroPosition();
+    // Return motor to starting zero position safely (only for multi-stop turntable Terrestrial Mode)
+    if (!config_.is_single_shot_flash) {
+        rotation_ctrl_->setZeroPosition();
+    }
     state_ = TerrestrialCaptureState::STATION_COMPLETED;
     return true;
 }
@@ -599,8 +616,10 @@ std::vector<core::LidarPointXYZIRT> TerrestrialStationManager::buildStationPoint
     }
     // Also preview live accumulating points for current stop in real time
     if (state_ == TerrestrialCaptureState::ACCUMULATING_STOP && !current_stop_points_.empty()) {
-        math::SE3d T_curr = RotationGeometry::computeStationLidarTransform(
-            current_nominal_angle_deg_, mount_profile_.T_cam_lidar, axis_calib_);
+        const math::SE3d T_curr = config_.is_single_shot_flash
+            ? config_.T_imu_lidar
+            : RotationGeometry::computeStationLidarTransform(
+                  current_nominal_angle_deg_, mount_profile_.T_cam_lidar, axis_calib_);
         for (const auto& pt : current_stop_points_) {
             merged.push_back(RotationGeometry::transformPointToStation(pt, T_curr));
         }

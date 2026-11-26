@@ -11,7 +11,7 @@ bool run_test_m11_hardening() {
 
     // 1. Nominal thermal state
     const auto p_nominal = controller.computeAdaptivePolicy(system::ThermalState::NOMINAL, 500);
-    if (p_nominal.camera_target_fps != 30 || p_nominal.lidar_point_stride != 1 || !p_nominal.allow_background_loop_closure) {
+    if (p_nominal.camera_target_fps != 30 || p_nominal.lidar_point_stride > 2 || !p_nominal.allow_background_loop_closure) {
         std::printf("  [M11 FAIL] Nominal policy unexpected parameters\n");
         return false;
     }

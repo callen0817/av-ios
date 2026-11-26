@@ -103,6 +103,69 @@ inline void writeTimestamp10Bytes(uint8_t* p, double timestamp_sec) {
     writeUint32BE(p + 6, usec);
 }
 
+// O(N) per-ring mixed-return ("flying pixel" / doorway veil) filter (< 0.3 ms per 75k-pt sweep).
+// Rejects isolated mid-air range bridge points that jump sharply from BOTH immediate azimuth
+// neighbors on the same laser ring, while preserving 100% of sharp foreground edges and walls.
+void filterFlyingPixelsPerRing(std::vector<core::LidarPointXYZIRT>& pts) {
+    const size_t n = pts.size();
+    if (n < 1000) return;
+
+    std::array<std::vector<uint32_t>, AiryDecoder::kTotalBeams> ring_indices;
+    for (auto& v : ring_indices) v.reserve(n / AiryDecoder::kTotalBeams + 16);
+    for (size_t i = 0; i < n; ++i) {
+        const uint16_t r = pts[i].ring;
+        if (r < AiryDecoder::kTotalBeams) {
+            ring_indices[r].push_back(static_cast<uint32_t>(i));
+        }
+    }
+
+    std::vector<uint8_t> keep(n, 1);
+    size_t dropped = 0;
+    for (size_t r = 0; r < AiryDecoder::kTotalBeams; ++r) {
+        const auto& idxs = ring_indices[r];
+        if (idxs.size() < 3) continue;
+        for (size_t k = 1; k + 1 < idxs.size(); ++k) {
+            const auto& p_prev = pts[idxs[k - 1]];
+            const auto& p_curr = pts[idxs[k]];
+            const auto& p_next = pts[idxs[k + 1]];
+
+            float daz_l = std::abs(p_curr.azimuth_deg - p_prev.azimuth_deg);
+            if (daz_l > 180.0f) daz_l = 360.0f - daz_l;
+            float daz_r = std::abs(p_next.azimuth_deg - p_curr.azimuth_deg);
+            if (daz_r > 180.0f) daz_r = 360.0f - daz_r;
+            if (daz_l > 3.0f || daz_r > 3.0f) continue;
+
+            const float rc = p_curr.range_m;
+            const float rp = p_prev.range_m;
+            const float rn = p_next.range_m;
+            const float thresh = std::max(0.25f, 0.08f * rc);
+            const float dl = std::abs(rc - rp);
+            const float dr = std::abs(rc - rn);
+
+            const bool isolated_spike = (dl > thresh && dr > thresh);
+            const float rmin = std::min(rp, rn);
+            const float rmax = std::max(rp, rn);
+            const bool mid_air_veil = ((rmax - rmin) > 0.50f &&
+                                       rc > (rmin + 0.15f) &&
+                                       rc < (rmax - 0.15f));
+            if (isolated_spike || mid_air_veil) {
+                keep[idxs[k]] = 0;
+                dropped++;
+            }
+        }
+    }
+
+    if (dropped == 0) return;
+    size_t write_idx = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (keep[i]) {
+            if (write_idx != i) pts[write_idx] = pts[i];
+            write_idx++;
+        }
+    }
+    pts.resize(write_idx);
+}
+
 }  // namespace
 
 AiryDecoder::AiryDecoder() {
@@ -132,9 +195,33 @@ AiryDecoder::AiryDecoder() {
         calib_.horizontal_angles_deg[i] = kFactoryHorDeg[i];
     }
     calib_.mac_address = "08:48:57:09:82:89";
-    math::Quatd q_factory(-0.702718, 0.001879, 0.004094, 0.711454);
-    q_factory.normalize();
-    calib_.T_imu_lidar = math::SE3d(q_factory, math::Vec3d(0.00425, 0.00418, -0.00446));
+    // Official RoboSense Airy DIFOP factory transform at offset 1092 is (qx, qy, qz, qw, tx, ty, tz)
+    // defining T_lidar_from_imu. Invert to obtain T_imu_from_lidar (matches av-scanar robosense.yaml).
+    math::Quatd q_lidar_imu(0.711454, -0.702718, 0.001879, 0.004094);
+    q_lidar_imu.normalize();
+    math::SE3d T_lidar_imu(q_lidar_imu, math::Vec3d(0.00425, 0.00418, -0.00446));
+    calib_.T_imu_lidar = T_lidar_imu.inverse();
+
+    // Official 96-beam RoboSense Airy staggered firing timestamps (microseconds, from decoder_RSAIRY.hpp)
+    static const double kFiringOffsetUs[kTotalBeams] = {
+         0.000,  0.000,  0.000,  0.000,  0.000,  0.000,  0.000,  0.000,
+         7.616,  7.616,  7.616,  7.616,  7.616,  7.616,  7.616,  7.616,
+        16.184, 16.184, 16.184, 16.184, 16.184, 16.184, 16.184, 16.184,
+        24.752, 24.752, 24.752, 24.752, 24.752, 24.752, 24.752, 24.752,
+        33.320, 33.320, 33.320, 33.320, 33.320, 33.320, 33.320, 33.320,
+        42.840, 42.840, 42.840, 42.840, 42.840, 42.840, 42.840, 42.840,
+        52.360, 52.360, 52.360, 52.360, 52.360, 52.360, 52.360, 52.360,
+        61.880, 61.880, 61.880, 61.880, 61.880, 61.880, 61.880, 61.880,
+        71.400, 71.400, 71.400, 71.400, 71.400, 71.400, 71.400, 71.400,
+        79.968, 79.968, 79.968, 79.968, 79.968, 79.968, 79.968, 79.968,
+        88.536, 88.536, 88.536, 88.536, 88.536, 88.536, 88.536, 88.536,
+        97.104, 97.104, 97.104, 97.104, 97.104, 97.104, 97.104, 97.104
+    };
+    for (size_t i = 0; i < kTotalBeams; ++i) {
+        chan_ts_offset_sec_[i] = kFiringOffsetUs[i] * 1e-6;
+        chan_az_ratio_[i] = chan_ts_offset_sec_[i] / kBlockIntervalSec;
+    }
+    lens_center_rxy_ = std::sqrt(kLensCenterRX * kLensCenterRX + kLensCenterRY * kLensCenterRY);
     rebuildTrigonometricTables();
 }
 
@@ -203,6 +290,20 @@ bool AiryDecoder::decodeMsopPacket(const uint8_t* data, size_t len,
 
     out_packet_points.reserve(kMsopBlocksPerPacket * kChannelsPerBlock);
 
+    // Estimate azimuth progression per 96-beam firing pair for intra-block azimuth interpolation
+    double block_az_diff_deg = 0.40;  // Nominal at 600 RPM (10 Hz)
+    {
+        uint16_t az0 = readUint16BE(data + kMsopHeaderSize + 0 * kMsopBlockSize + 2);
+        uint16_t az2 = readUint16BE(data + kMsopHeaderSize + 2 * kMsopBlockSize + 2);
+        if (az0 < 36000u && az2 < 36000u) {
+            double diff = static_cast<double>(az2 - az0) * kAzimuthResolutionDeg;
+            if (diff < -180.0) diff += 360.0;
+            if (diff > 0.0 && diff < 5.0) {
+                block_az_diff_deg = diff;
+            }
+        }
+    }
+
     // Parse 8 Data Blocks (148 bytes each, starting at byte 42)
     for (size_t b = 0; b < kMsopBlocksPerPacket; ++b) {
         const uint8_t* block_ptr = data + kMsopHeaderSize + b * kMsopBlockSize;
@@ -224,6 +325,7 @@ bool AiryDecoder::decodeMsopPacket(const uint8_t* data, size_t len,
             if (block_azimuth_deg < last_azimuth_deg_ && (last_azimuth_deg_ - block_azimuth_deg) > 180.0) {
                 if (!accumulating_frame_.points.empty()) {
                     accumulating_frame_.timestamp_end_sec = pkt_timestamp_sec + (b / 2) * kBlockIntervalSec;
+                    filterFlyingPixelsPerRing(accumulating_frame_.points);
                     out_completed_frame = std::move(accumulating_frame_);
                     out_sweep_completed = true;
                     next_frame_id_++;
@@ -256,20 +358,23 @@ bool AiryDecoder::decodeMsopPacket(const uint8_t* data, size_t len,
             }
 
             size_t ring_idx = channel_group_offset + ch;
-            double az_deg = block_azimuth_deg + hor_offset_deg_[ring_idx];
+            double az_interp_deg = block_azimuth_deg + block_az_diff_deg * chan_az_ratio_[ring_idx];
+            double az_deg = az_interp_deg + hor_offset_deg_[ring_idx];
             if (az_deg >= 360.0) az_deg -= 360.0;
             if (az_deg < 0.0) az_deg += 360.0;
             double az_rad = az_deg * math::kDegToRad;
+            double az_blk_rad = az_interp_deg * math::kDegToRad;
 
             double xy_proj = range_m * cos_vert_rad_[ring_idx];
             core::LidarPointXYZIRT pt;
-            // RoboSense right-handed coordinate frame: X forward/right, Y forward, Z up
-            pt.x = xy_proj * std::cos(az_rad);
-            pt.y = xy_proj * std::sin(az_rad);
-            pt.z = range_m * sin_vert_rad_[ring_idx];
+            // Official RoboSense Airy coordinate frame (decoder_RSAIRY.hpp):
+            // Clockwise azimuth => y is negated, plus Airy optical lens center offsets (Rxy, RZ)
+            pt.x =  xy_proj * std::cos(az_rad) + lens_center_rxy_ * std::cos(az_blk_rad);
+            pt.y = -xy_proj * std::sin(az_rad) - lens_center_rxy_ * std::sin(az_blk_rad);
+            pt.z =  range_m * sin_vert_rad_[ring_idx] + kLensCenterRZ;
             pt.intensity = static_cast<float>(reflectivity);
             pt.ring = static_cast<uint16_t>(ring_idx);
-            pt.timestamp_sec = pkt_timestamp_sec + block_time_offset + static_cast<double>(ch) * kChannelIntervalSec;
+            pt.timestamp_sec = pkt_timestamp_sec + block_time_offset + chan_ts_offset_sec_[ring_idx];
             pt.range_m = static_cast<float>(range_m);
             pt.azimuth_deg = static_cast<float>(az_deg);
             pt.elevation_deg = static_cast<float>(calib_.vertical_angles_deg[ring_idx]);
@@ -344,20 +449,22 @@ bool AiryDecoder::decodeDifopPacket(const uint8_t* data, size_t len,
             uint16_t mag = readUint16BE(hp + 1);
             out_calib.horizontal_angles_deg[i] = sign * static_cast<double>(mag) * 0.01;
         }
-        // Parse IMU_CALIB_DATA (28 bytes at offset 1092: qw, qx, qy, qz, tx, ty, tz as big-endian floats)
+        // Parse IMU_CALIB_DATA (28 bytes at offset 1092: qx, qy, qz, qw, tx, ty, tz as big-endian floats)
+        // Per official decoder_RSAIRY.hpp, this defines T_lidar_from_imu; invert for FAST-LIVO2 T_imu_from_lidar.
         const uint8_t* imu_cal_ptr = data + 1092;
-        float qw = readFloatBE(imu_cal_ptr + 0);
-        float qx = readFloatBE(imu_cal_ptr + 4);
-        float qy = readFloatBE(imu_cal_ptr + 8);
-        float qz = readFloatBE(imu_cal_ptr + 12);
+        float qx = readFloatBE(imu_cal_ptr + 0);
+        float qy = readFloatBE(imu_cal_ptr + 4);
+        float qz = readFloatBE(imu_cal_ptr + 8);
+        float qw = readFloatBE(imu_cal_ptr + 12);
         float tx = readFloatBE(imu_cal_ptr + 16);
         float ty = readFloatBE(imu_cal_ptr + 20);
         float tz = readFloatBE(imu_cal_ptr + 24);
         double qnorm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
         if (std::isfinite(qnorm) && qnorm > 0.1 && qnorm < 10.0) {
-            math::Quatd q(qx, qy, qz, qw);
-            q.normalize();
-            out_calib.T_imu_lidar = math::SE3d(q, math::Vec3d(tx, ty, tz));
+            math::Quatd q_lidar_imu(qx, qy, qz, qw);
+            q_lidar_imu.normalize();
+            math::SE3d T_lidar_imu(q_lidar_imu, math::Vec3d(tx, ty, tz));
+            out_calib.T_imu_lidar = T_lidar_imu.inverse();
         } else {
             out_calib.T_imu_lidar = math::SE3d::Identity();
         }
@@ -456,15 +563,21 @@ bool AiryDecoder::decodeImuPacket(const uint8_t* data, size_t len,
 
     if (is_hw_imu) {
         out_imu.timestamp_sec = parseTimestamp10Bytes(data + 4);
-        // Hardware registers: [-4g, +4g] -> 8192 LSB/g; [-500, +500] dps -> 65.536 LSB/dps
-        constexpr double kAccelScaleMps2 = 9.80665 / 8192.0;
-        constexpr double kGyroScaleRads = (1.0 / 65.536) * math::kDegToRad;
-        out_imu.accel_mps2.x = static_cast<double>(readInt32BE(data + 14)) * kAccelScaleMps2;
-        out_imu.accel_mps2.y = static_cast<double>(readInt32BE(data + 18)) * kAccelScaleMps2;
-        out_imu.accel_mps2.z = static_cast<double>(readInt32BE(data + 22)) * kAccelScaleMps2;
-        out_imu.gyro_rads.x = static_cast<double>(readInt32BE(data + 26)) * kGyroScaleRads;
-        out_imu.gyro_rads.y = static_cast<double>(readInt32BE(data + 30)) * kGyroScaleRads;
-        out_imu.gyro_rads.z = static_cast<double>(readInt32BE(data + 34)) * kGyroScaleRads;
+        // Official decoder_RSAIRY.hpp dynamic FSR decoding:
+        // byte 42: odr, byte 43: acceIFsr (0:2g, 1:4g, 2:8g, 3:16g), byte 44: gyroIFsr (0:250, 1:500, 2:1000, 3:2000 dps)
+        const uint8_t acce_fsr_code = (data[43] <= 3u) ? data[43] : 1u;
+        const uint8_t gyro_fsr_code = (data[44] <= 3u) ? data[44] : 1u;
+        const double accl_fsr_g = static_cast<double>(1u << (acce_fsr_code + 1u));
+        const double gyro_fsr_dps = static_cast<double>(250u * (1u << gyro_fsr_code));
+        const double accel_scale_mps2 = (accl_fsr_g / 32768.0) * 9.80665;
+        const double gyro_scale_rads = (gyro_fsr_dps / 32768.0) * math::kDegToRad;
+
+        out_imu.accel_mps2.x = static_cast<double>(readInt32BE(data + 14)) * accel_scale_mps2;
+        out_imu.accel_mps2.y = static_cast<double>(readInt32BE(data + 18)) * accel_scale_mps2;
+        out_imu.accel_mps2.z = static_cast<double>(readInt32BE(data + 22)) * accel_scale_mps2;
+        out_imu.gyro_rads.x = static_cast<double>(readInt32BE(data + 26)) * gyro_scale_rads;
+        out_imu.gyro_rads.y = static_cast<double>(readInt32BE(data + 30)) * gyro_scale_rads;
+        out_imu.gyro_rads.z = static_cast<double>(readInt32BE(data + 34)) * gyro_scale_rads;
         out_imu.temperature_c = static_cast<float>(readInt32BE(data + 38)) / 256.0f;
         out_imu.status_flags = data[42];
         out_imu.sequence_id = readUint32BE(data + 45);

@@ -23,17 +23,17 @@ bool run_test_m10_storage_export() {
         core::KeyframeSubmap sm;
         sm.keyframe_id = k;
         sm.timestamp_sec = 100.0 + k;
-        sm.T_world_submap = math::SE3d(math::SO3d::Identity(), math::Vec3d(1.0 * k, 2.0 * k, 0.0));
+        sm.T_world_keyframe = math::SE3d(math::SO3d(), math::Vec3d(1.0 * k, 2.0 * k, 0.0));
         for (int i = 0; i < 40; ++i) {
             core::LidarPointXYZIRT pt;
-            pt.x = static_cast<float>(i * 0.1 + k);
-            pt.y = static_cast<float>(i * 0.05);
-            pt.z = -0.8f;
+            pt.x = i * 0.1 + k;
+            pt.y = i * 0.05;
+            pt.z = -0.8;
             pt.intensity = 150.0f;
             pt.r = 200;
             pt.g = 120;
             pt.b = 60;
-            pt.has_rgb = 1;
+            pt.colorized = true;
             sm.local_points.push_back(pt);
         }
         if (!store.appendKeyframeToWal(sm)) {

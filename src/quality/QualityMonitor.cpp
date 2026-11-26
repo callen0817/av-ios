@@ -15,10 +15,14 @@ ScanQualityReport QualityMonitor::evaluateFrameQuality(const core::SlamState& cu
     rep.degenerate_corridor_warning = metrics.is_degenerate;
     rep.estimated_drift_risk_m = 0.008 * unclosed_trajectory_length_m + current_state.position_uncertainty_m;
 
-    if (metrics.deskewed_points_count > 0) {
+    const size_t eval_denom = (metrics.evaluated_features_count > 0)
+        ? metrics.evaluated_features_count
+        : metrics.deskewed_points_count;
+    if (eval_denom > 0) {
+        const double mult = (metrics.evaluated_features_count > 0) ? 1.0 : 2.0;
         rep.scan_overlap_ratio = std::clamp(
-            static_cast<double>(metrics.geometric_correspondences * 2) /
-                static_cast<double>(metrics.deskewed_points_count),
+            static_cast<double>(metrics.geometric_correspondences) * mult /
+                static_cast<double>(eval_denom),
             0.0, 1.0);
     } else {
         rep.scan_overlap_ratio = 0.0;
@@ -31,7 +35,7 @@ ScanQualityReport QualityMonitor::evaluateFrameQuality(const core::SlamState& cu
         consecutive_poor_frames_ = 0;
     }
 
-    rep.tracking_lost = (consecutive_poor_frames_ >= 3) ||
+    rep.tracking_lost = (consecutive_poor_frames_ >= 10) ||
                         (current_state.status == core::TrackingStatus::LOST_RELOCALIZING);
 
     double rmse_score = std::clamp(1.0 - (metrics.geometric_rmse_m / 0.25), 0.0, 1.0);
@@ -130,7 +134,7 @@ std::vector<core::LidarPointXYZIRT> QualityMonitor::filterDynamicObjects(
     struct VoxelStats {
         uint32_t hit_submaps{0};
         uint32_t pass_through_rays{0};
-        uint64_t last_submap_id{0};
+        uint64_t last_submap_id{std::numeric_limits<uint64_t>::max()};
     };
     std::unordered_map<slam::VoxelKey, VoxelStats, slam::VoxelKeyHash> occ_map;
 
@@ -158,6 +162,7 @@ std::vector<core::LidarPointXYZIRT> QualityMonitor::filterDynamicObjects(
         }
     }
 
+    const bool enforce_min_obs = (submaps.size() >= min_static_observations);
     std::vector<core::LidarPointXYZIRT> static_points;
     for (const auto& sm : submaps) {
         for (const auto& pt : sm.local_points) {
@@ -165,8 +170,9 @@ std::vector<core::LidarPointXYZIRT> QualityMonitor::filterDynamicObjects(
             slam::VoxelKey k = toKey(pw.x, pw.y, pw.z);
             auto it = occ_map.find(k);
             if (it != occ_map.end()) {
-                bool is_transient = (it->second.hit_submaps < min_static_observations) &&
-                                    (it->second.pass_through_rays > it->second.hit_submaps);
+                bool is_transient = (enforce_min_obs && it->second.hit_submaps < min_static_observations) ||
+                                    ((it->second.hit_submaps < min_static_observations) &&
+                                     (it->second.pass_through_rays > it->second.hit_submaps));
                 if (is_transient) continue;
             }
             core::LidarPointXYZIRT out_pt = pt;
@@ -192,16 +198,30 @@ FloorPlanGrid2D QualityMonitor::generateLiveFloorPlan(
         return plan;
     }
 
-    double min_x = 1e9, max_x = -1e9, min_y = 1e9, max_y = -1e9, min_z = 1e9, max_z = -1e9;
-    for (const auto& pt : global_points) {
+    double min_x = 1e9, max_x = -1e9, min_y = 1e9, max_y = -1e9;
+    std::vector<double> z_samples;
+    const size_t z_step = std::max<size_t>(1, global_points.size() / 20000);
+    z_samples.reserve(global_points.size() / z_step + 1);
+    for (size_t i = 0; i < global_points.size(); ++i) {
+        const auto& pt = global_points[i];
         min_x = std::min(min_x, pt.x); max_x = std::max(max_x, pt.x);
         min_y = std::min(min_y, pt.y); max_y = std::max(max_y, pt.y);
-        min_z = std::min(min_z, pt.z); max_z = std::max(max_z, pt.z);
+        if (i % z_step == 0) z_samples.push_back(pt.z);
     }
 
-    // Estimate floor elevation from lower 10th percentile of Z values
-    plan.estimated_floor_z_m = min_z + 0.05 * (max_z - min_z);
-    plan.estimated_ceiling_z_m = std::max(plan.estimated_floor_z_m + 2.2, max_z - 0.1);
+    // Robust percentile floor/ceiling estimation (immune to stray Z outliers, matches av-scanar 4046133)
+    auto nthPercentile = [&](double frac) -> double {
+        if (z_samples.empty()) return 0.0;
+        size_t idx = std::min(z_samples.size() - 1, static_cast<size_t>(frac * static_cast<double>(z_samples.size())));
+        std::nth_element(z_samples.begin(), z_samples.begin() + static_cast<std::ptrdiff_t>(idx), z_samples.end());
+        return z_samples[idx];
+    };
+    const double p05_z = nthPercentile(0.05);
+    const double p50_z = nthPercentile(0.50);
+    const double p95_z = nthPercentile(0.95);
+
+    plan.estimated_floor_z_m = p05_z;
+    plan.estimated_ceiling_z_m = std::max(p05_z + 2.2, p95_z);
 
     double margin = 1.5;
     plan.origin_x_m = min_x - margin;
@@ -211,8 +231,13 @@ FloorPlanGrid2D QualityMonitor::generateLiveFloorPlan(
     plan.occupancy_cells.assign(static_cast<size_t>(plan.width_cells * plan.height_cells), 0);
 
     std::vector<uint16_t> wall_counts(static_cast<size_t>(plan.width_cells * plan.height_cells), 0);
-    double wall_z_min = plan.estimated_floor_z_m + 0.25;
-    double wall_z_max = plan.estimated_floor_z_m + 2.10;
+    // Clean horizontal wall slice strictly between floor and ceiling (no floor/ceiling vertical smear!)
+    double wall_z_min = p05_z + 0.45;
+    double wall_z_max = std::min(p95_z - 0.30, p05_z + 1.95);
+    if (wall_z_max <= wall_z_min + 0.25) {
+        wall_z_min = p50_z - 0.20;
+        wall_z_max = p50_z + 0.50;
+    }
 
     for (const auto& pt : global_points) {
         int gx = static_cast<int>(std::floor((pt.x - plan.origin_x_m) / plan.resolution_m));

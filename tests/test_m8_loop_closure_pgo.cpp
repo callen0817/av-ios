@@ -22,11 +22,11 @@ std::vector<core::LidarPointXYZIRT> generateStructuredRoomCloud(const math::SE3d
                 z_max = 1.1; // medium cabinet in quadrant 4
             }
             for (double z = -1.2; z <= z_max + 1e-3; z += 0.35) {
-                const math::Vec3d p = T_pose.transform(math::Vec3d(x, y, z));
+                const math::Vec3d p = T_pose * math::Vec3d(x, y, z);
                 core::LidarPointXYZIRT pt;
-                pt.x = static_cast<float>(p.x());
-                pt.y = static_cast<float>(p.y());
-                pt.z = static_cast<float>(p.z());
+                pt.x = p.x;
+                pt.y = p.y;
+                pt.z = p.z;
                 pt.intensity = 120.0f;
                 cloud.push_back(pt);
             }
@@ -106,7 +106,7 @@ bool run_test_m8_loop_closure_pgo() {
         core::KeyframeSubmap kf;
         kf.keyframe_id = static_cast<uint64_t>(i);
         kf.timestamp_sec = static_cast<double>(i);
-        kf.T_world_submap = math::SE3d(math::SO3d::Identity(), true_pos + drift);
+        kf.T_world_keyframe = math::SE3d(math::SO3d(), true_pos + drift);
         kf.local_points = base_cloud;
         pgo.addKeyframeSubmap(kf);
     }
@@ -124,10 +124,10 @@ bool run_test_m8_loop_closure_pgo() {
     }
 
     const double pre_opt_closure_err =
-        (pgo.getSubmaps().back().T_world_submap.translation() - pgo.getSubmaps().front().T_world_submap.translation()).norm();
+        (pgo.getSubmaps().back().T_world_keyframe.t - pgo.getSubmaps().front().T_world_keyframe.t).norm();
     const auto opt_report = pgo.optimizeGlobalPoseGraph(30);
     const double post_opt_closure_err =
-        (pgo.getSubmaps().back().T_world_submap.translation() - pgo.getSubmaps().front().T_world_submap.translation()).norm();
+        (pgo.getSubmaps().back().T_world_keyframe.t - pgo.getSubmaps().front().T_world_keyframe.t).norm();
 
     if (!opt_report.converged || post_opt_closure_err >= pre_opt_closure_err * 0.25 ||
         opt_report.final_chi2_error >= opt_report.initial_chi2_error) {

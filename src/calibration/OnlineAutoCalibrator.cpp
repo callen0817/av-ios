@@ -70,18 +70,56 @@ void OnlineAutoCalibrator::reset(const AutoCalibConfig& config) {
     cam_poses_.clear();
     has_prev_key_pose_ = false;
     has_initial_lock_ = false;
+    seeded_from_profile_ = false;
     env_feature_rich_ = false;
     continuous_refine_in_flight_ = false;
     start_time_sec_ = -1.0;
     last_lidar_time_sec_ = -1.0;
     last_vl_capture_time_sec_ = -1.0;
     last_continuous_refine_time_sec_ = -1.0;
+    last_clock_offset_sec_ = 0.0;
+    has_clock_offset_ = false;
     prev_T_world_lidar_ = math::SE3d::Identity();
     prev_T_world_cam_ = math::SE3d::Identity();
     axis_scatter_ = math::Mat3d::Zero();
     second_axis_eig_ = 0.0;
     confidence_score_ = 0.0;
     initial_locked_profile_ = core::ExtrinsicCalibrationProfile{};
+    motion_pairs_.clear();
+    vl_pairs_.clear();
+    continuous_vl_pairs_.clear();
+    imu_gyro_norms_.clear();
+    cam_rot_norms_.clear();
+}
+
+void OnlineAutoCalibrator::seedFromMountProfile(const core::ExtrinsicCalibrationProfile& profile,
+                                                const AutoCalibConfig& config) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    config_ = config;
+    cam_poses_.clear();
+    has_prev_key_pose_ = false;
+    has_initial_lock_ = true;
+    seeded_from_profile_ = true;
+    env_feature_rich_ = true;
+    continuous_refine_in_flight_ = false;
+    start_time_sec_ = -1.0;
+    last_lidar_time_sec_ = -1.0;
+    last_vl_capture_time_sec_ = -1.0;
+    last_continuous_refine_time_sec_ = -1.0;
+    last_clock_offset_sec_ = 0.0;
+    has_clock_offset_ = false;
+    axis_scatter_ = math::Mat3d::Zero();
+    second_axis_eig_ = 1.0;
+
+    initial_locked_profile_ = profile;
+    initial_locked_profile_.verified = true;
+    // Allow first DirectVLCalib micro-refinement pass to improve NID relative to nominal seed
+    if (initial_locked_profile_.nid_metric <= 0.0 || initial_locked_profile_.nid_metric < 0.85) {
+        initial_locked_profile_.nid_metric = 0.96;
+    }
+    confidence_score_ = std::max(0.80, profile.confidence_score);
+    state_ = AutoCalibState::LOCKED_GREEN;
+
     motion_pairs_.clear();
     vl_pairs_.clear();
     continuous_vl_pairs_.clear();
@@ -100,6 +138,19 @@ void OnlineAutoCalibrator::pushCameraPose(double host_timestamp_sec, const math:
 
     if (!cam_poses_.empty() && host_timestamp_sec <= cam_poses_.back().timestamp_sec) {
         return;
+    }
+    // Record true continuous camera angular speed (rad/s) for accurate cross-correlation with 200 Hz IMU gyro
+    if (!cam_poses_.empty() && has_clock_offset_) {
+        const auto& prev = cam_poses_.back();
+        const double dt = host_timestamp_sec - prev.timestamp_sec;
+        if (dt > 0.005 && dt < 0.20) {
+            const double omega_cam = (prev.pose.so3.inverse() * pose.so3).log().norm() / dt;
+            const double t_mid_lidar = 0.5 * (prev.timestamp_sec + host_timestamp_sec) + last_clock_offset_sec_;
+            cam_rot_norms_.emplace_back(t_mid_lidar, omega_cam);
+            if (cam_rot_norms_.size() > 300) {
+                cam_rot_norms_.erase(cam_rot_norms_.begin(), cam_rot_norms_.begin() + 100);
+            }
+        }
     }
     cam_poses_.push_back({host_timestamp_sec, pose});
     while (cam_poses_.size() > 300) {
@@ -170,6 +221,8 @@ bool OnlineAutoCalibrator::pushLidarBundleAndPose(const sync::SyncBundle& bundle
         start_time_sec_ = lidar_t;
     }
     last_lidar_time_sec_ = lidar_t;
+    last_clock_offset_sec_ = bundle.estimated_cam_to_lidar_offset_sec;
+    has_clock_offset_ = true;
 
     env_feature_rich_ = evaluateFeatureRichness(
         bundle, config_.min_edge_pixel_ratio, config_.min_lidar_points);
@@ -269,8 +322,6 @@ bool OnlineAutoCalibrator::pushLidarBundleAndPose(const sync::SyncBundle& bundle
         math::SymEigen3d eig = math::SymEigen3d::compute(axis_scatter_);
         second_axis_eig_ = eig.eigenvalues[1];
 
-        cam_rot_norms_.emplace_back(lidar_t, rot_b);
-
         prev_T_world_lidar_ = T_world_lidar;
         prev_T_world_cam_ = T_world_cam;
     } else if (trans_a >= config_.min_step_trans_m && rot_a < 0.01) {
@@ -363,10 +414,26 @@ bool OnlineAutoCalibrator::completeContinuousRefine(const std::vector<DirectVLCa
     continuous_refine_in_flight_ = false;
     last_continuous_refine_time_sec_ = last_lidar_time_sec_;
 
-    if (ok && conf >= 0.45 && env_feature_rich_) {
+    // Only accept bounded micro-refinement that strictly improves alignment and passes physical sanity;
+    // otherwise keep initial_locked_profile_ frozen so colors never jitter mid-scan.
+    const double max_rot_deg = seeded_from_profile_ ? 3.5 : 1.5;
+    const double max_trans_m = seeded_from_profile_ ? 0.025 : 0.015;
+    const math::SE3d delta_T = init_prof.T_cam_lidar.inverse() * refined_T;
+    const double delta_rot_deg = delta_T.so3.log().norm() * math::kRadToDeg;
+    const double delta_trans_m = delta_T.t.norm();
+    const bool sane_update = (delta_rot_deg <= max_rot_deg && delta_trans_m <= max_trans_m &&
+                              refined_T.so3.R(2, 2) > 0.25 && refined_T.t.norm() <= 0.50);
+
+    if (ok && sane_update && conf >= 0.45 && nid < 0.96 && env_feature_rich_) {
         out_profile_to_apply = init_prof;
-        out_profile_to_apply.T_cam_lidar = refined_T;
-        out_profile_to_apply.nid_metric = nid;
+        if (nid < init_prof.nid_metric) {
+            out_profile_to_apply.T_cam_lidar = refined_T;
+            out_profile_to_apply.nid_metric = nid;
+            if (seeded_from_profile_) {
+                initial_locked_profile_.T_cam_lidar = refined_T;
+                initial_locked_profile_.nid_metric = nid;
+            }
+        }
         out_profile_to_apply.confidence_score = std::max(init_prof.confidence_score, conf);
         out_profile_to_apply.verified = true;
         confidence_score_ = out_profile_to_apply.confidence_score;
@@ -374,7 +441,7 @@ bool OnlineAutoCalibrator::completeContinuousRefine(const std::vector<DirectVLCa
         return true;
     }
 
-    // Revert to initial lock when features are insufficient for continuous lock
+    // Revert to initial lock / mount profile seed when features are insufficient — never turn off colorization
     out_profile_to_apply = initial_locked_profile_;
     out_profile_to_apply.verified = true;
     confidence_score_ = initial_locked_profile_.confidence_score;
@@ -422,14 +489,20 @@ AutoCalibStatus OnlineAutoCalibrator::getStatus() const {
             break;
         case AutoCalibState::LOCKED_GREEN:
             st.popup_color = AutoCalibPopupColor::GREEN;
-            st.popup_title = "LOCKED";
+            st.popup_title = seeded_from_profile_ ? "PROFILE LOCKED" : "LOCKED";
             oss.precision(2);
-            oss << std::fixed << "Confirmed (conf " << st.confidence_score << ") — live color active";
+            if (seeded_from_profile_) {
+                oss << std::fixed << "Rig profile active (conf " << st.confidence_score << ") — live RGB colorizing";
+            } else {
+                oss << std::fixed << "Confirmed (conf " << st.confidence_score << ") — live color active";
+            }
             break;
         case AutoCalibState::LOCKED_YELLOW_FALLBACK:
             st.popup_color = AutoCalibPopupColor::YELLOW;
-            st.popup_title = "LOCKED";
-            oss << "Low features — using initial lock for colorization";
+            st.popup_title = seeded_from_profile_ ? "PROFILE ACTIVE" : "LOCKED";
+            oss << (seeded_from_profile_
+                ? "Low texture — holding rig profile for live RGB color"
+                : "Low features — using initial lock for colorization");
             break;
     }
     st.status_message = oss.str();

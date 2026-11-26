@@ -59,8 +59,8 @@ bool run_test_m7_calibration() {
         return false;
     }
 
-    const double he_rot_err_deg = (hand_eye_T_cam_lidar.so3().inverse() * T_cam_lidar_gt.so3()).log().norm() * 180.0 / math::kPi;
-    const double he_trans_err_m = (hand_eye_T_cam_lidar.translation() - T_cam_lidar_gt.translation()).norm();
+    const double he_rot_err_deg = (hand_eye_T_cam_lidar.so3.inverse() * T_cam_lidar_gt.so3).log().norm() * 180.0 / math::kPi;
+    const double he_trans_err_m = (hand_eye_T_cam_lidar.t - T_cam_lidar_gt.t).norm();
     if (he_rot_err_deg > 0.25 || he_trans_err_m > 0.005) {
         std::printf("  [M7 FAIL] Hand-Eye error too high: rot=%.4f deg, trans=%.5f m\n", he_rot_err_deg, he_trans_err_m);
         return false;
@@ -71,21 +71,19 @@ bool run_test_m7_calibration() {
     for (int f = 0; f < 3; ++f) {
         calibration::DirectVLCalibPair vlp;
         vlp.rgb_frame.timestamp_sec = 10.0 + f;
-        vlp.rgb_frame.width = 160;
-        vlp.rgb_frame.height = 120;
         vlp.rgb_frame.intrinsics.width = 160;
         vlp.rgb_frame.intrinsics.height = 120;
         vlp.rgb_frame.intrinsics.fx = 130.0;
         vlp.rgb_frame.intrinsics.fy = 130.0;
         vlp.rgb_frame.intrinsics.cx = 80.0;
         vlp.rgb_frame.intrinsics.cy = 60.0;
-        vlp.rgb_frame.gray_pixels.assign(160 * 120, 40);
-        vlp.rgb_frame.rgb_pixels.assign(160 * 120 * 3, 40);
+        vlp.rgb_frame.gray_bytes.assign(160 * 120, 40);
+        vlp.rgb_frame.rgb_bytes.assign(160 * 120 * 3, 40);
 
         // Render synthetic high-contrast rectangular target in camera frame and corresponding 3D LiDAR points
         for (int v = 30; v < 90; ++v) {
             for (int u = 45; u < 115; ++u) {
-                vlp.rgb_frame.gray_pixels[v * 160 + u] = 220;
+                vlp.rgb_frame.gray_bytes[v * 160 + u] = 220;
             }
         }
 
@@ -98,11 +96,11 @@ bool run_test_m7_calibration() {
                 const bool inside_rect = (u >= 45.0 && u < 115.0 && v >= 30.0 && v < 90.0);
 
                 // Transform into LiDAR frame using inverse of ground-truth T_cam_lidar
-                const math::Vec3d p_lidar = T_lidar_cam_gt. transform(p_cam);
+                const math::Vec3d p_lidar = T_lidar_cam_gt * p_cam;
                 core::LidarPointXYZIRT pt;
-                pt.x = static_cast<float>(p_lidar.x());
-                pt.y = static_cast<float>(p_lidar.y());
-                pt.z = static_cast<float>(p_lidar.z());
+                pt.x = p_lidar.x;
+                pt.y = p_lidar.y;
+                pt.z = p_lidar.z;
                 pt.intensity = inside_rect ? 220.0f : 40.0f;
                 vlp.lidar_frame.points.push_back(pt);
             }
@@ -149,9 +147,35 @@ bool run_test_m7_calibration() {
     std::filesystem::remove(calib_file);
 
     if (loaded_profile.device_model != "iPad_A2696" ||
-        (loaded_profile.T_cam_lidar.translation() - profile.T_cam_lidar.translation()).norm() > 1e-6) {
+        (loaded_profile.T_cam_lidar.t - profile.T_cam_lidar.t).norm() > 1e-6) {
         std::printf("  [M7 FAIL] Profile persistence round-trip mismatch\n");
         return false;
+    }
+
+    // 6. Verify flipped 180-deg X extrusion (zero camera FOV visibility) is strictly REJECTED from locking
+    {
+        const math::SE3d T_cam_lidar_flipped(math::SO3d::exp(math::Vec3d(math::kPi, 0.0, 0.0)), math::Vec3d(0.05, 0.05, 0.05));
+        const math::SE3d T_lidar_cam_flipped = T_cam_lidar_flipped.inverse();
+        std::vector<calibration::HandEyeMotionPair> flipped_motions;
+        for (int i = 0; i < 16; ++i) {
+            const double t = 0.4 * i;
+            math::Vec3d omega(0.25 * std::sin(t), 0.28 * std::cos(1.3 * t), 0.22 * std::sin(0.7 * t + 0.4));
+            math::Vec3d step_t(0.12 * std::cos(t), 0.09 * std::sin(t), 0.05 * std::sin(2.0 * t));
+            math::SE3d A(math::SO3d::exp(omega), step_t);
+            math::SE3d B = T_lidar_cam_flipped.inverse() * A * T_lidar_cam_flipped;
+            calibration::HandEyeMotionPair pair;
+            pair.A_lidar_motion = A;
+            pair.B_camera_motion = B;
+            pair.timestamp_sec = t;
+            flipped_motions.push_back(pair);
+        }
+        core::ExtrinsicCalibrationProfile bad_profile{};
+        bool locked_bad = calibration::TargetlessCalibrator::runFullTargetlessCalibration(
+            flipped_motions, vl_pairs, imu_norms, cam_norms, "iPad13,16", "bad_flip_test", bad_profile);
+        if (locked_bad || bad_profile.verified) {
+            std::printf("  [M7 FAIL] runFullTargetlessCalibration erroneously locked flipped zero-visibility pose!\n");
+            return false;
+        }
     }
 
     return true;

@@ -80,11 +80,13 @@ bool TimeSynchronizer::pushLidarFrame(const core::LidarFrame& frame, double host
 
 bool TimeSynchronizer::pushRgbFrame(const core::RgbFrame& rgb_frame) {
     std::lock_guard<std::mutex> lock(mutex_);
-    core::RgbFrame aligned = rgb_frame;
-    // Map camera timestamp into LiDAR clock domain using software clock offset + calibrated temporal offset
-    aligned.timestamp_sec = rgb_frame.timestamp_sec + diag_.estimated_clock_offset_sec + diag_.calibrated_cam_offset_sec;
-    rgb_buffer_.push_back(std::move(aligned));
-    while (rgb_buffer_.size() > 60) {
+    // Store raw host monotonic timestamp and map into LiDAR clock domain dynamically at popSyncBundle
+    // using the latest settled clock offset (prevents startup race before offset_window_ locks).
+    StampedRgbFrame entry;
+    entry.host_timestamp_sec = rgb_frame.timestamp_sec;
+    entry.frame = rgb_frame;
+    rgb_buffer_.push_back(std::move(entry));
+    while (rgb_buffer_.size() > 90) {
         rgb_buffer_.pop_front();
     }
     diag_.camera_frames_received++;
@@ -107,8 +109,9 @@ bool TimeSynchronizer::popSyncBundle(SyncBundle& out_bundle) {
     out_bundle = SyncBundle{};
     out_bundle.lidar_frame = front_lidar;
     lidar_buffer_.pop_front();
-    out_bundle.estimated_cam_to_lidar_offset_sec =
+    const double total_cam_offset =
         diag_.estimated_clock_offset_sec + diag_.calibrated_cam_offset_sec;
+    out_bundle.estimated_cam_to_lidar_offset_sec = total_cam_offset;
 
     // Collect IMU measurements spanning [t_start - 0.015s, t_end + 0.005s]
     for (const auto& imu : imu_buffer_) {
@@ -125,24 +128,28 @@ bool TimeSynchronizer::popSyncBundle(SyncBundle& out_bundle) {
         imu_buffer_.pop_front();
     }
 
-    // Match closest camera frame within +/- 40 ms of scan midpoint
-    double mid_time = 0.5 * (out_bundle.lidar_frame.timestamp_start_sec + out_bundle.lidar_frame.timestamp_end_sec);
-    double best_dt = 0.045;
+    // Match closest camera frame within +/- 100 ms of scan midpoint using live settled clock offset
+    // (SLERP in FastLivo2Engine interpolates the exact body pose at rgb_frame.timestamp_sec)
+    const double mid_time = 0.5 * (out_bundle.lidar_frame.timestamp_start_sec + out_bundle.lidar_frame.timestamp_end_sec);
+    double best_dt = 0.100;
     int best_idx = -1;
     for (size_t i = 0; i < rgb_buffer_.size(); ++i) {
-        double dt = std::abs(rgb_buffer_[i].timestamp_sec - mid_time);
+        const double aligned_ts = rgb_buffer_[i].host_timestamp_sec + total_cam_offset;
+        const double dt = std::abs(aligned_ts - mid_time);
         if (dt < best_dt) {
             best_dt = dt;
             best_idx = static_cast<int>(i);
         }
     }
     if (best_idx >= 0) {
-        out_bundle.rgb_frame = rgb_buffer_[static_cast<size_t>(best_idx)];
-        // Drop camera frames older than current scan
-        while (!rgb_buffer_.empty() &&
-               rgb_buffer_.front().timestamp_sec < out_bundle.lidar_frame.timestamp_start_sec) {
-            rgb_buffer_.pop_front();
-        }
+        core::RgbFrame matched = rgb_buffer_[static_cast<size_t>(best_idx)].frame;
+        matched.timestamp_sec = rgb_buffer_[static_cast<size_t>(best_idx)].host_timestamp_sec + total_cam_offset;
+        out_bundle.rgb_frame = std::move(matched);
+    }
+    // Prune stale camera frames older than current scan start - 150 ms
+    while (!rgb_buffer_.empty() &&
+           (rgb_buffer_.front().host_timestamp_sec + total_cam_offset) < (out_bundle.lidar_frame.timestamp_start_sec - 0.15)) {
+        rgb_buffer_.pop_front();
     }
 
     diag_.bundles_emitted++;

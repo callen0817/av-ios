@@ -34,13 +34,14 @@ struct LoopCandidate {
 
 class ScanContextDatabase {
 public:
-    explicit ScanContextDatabase(int min_keyframe_gap = 15, double sc_distance_threshold = 0.22);
+    explicit ScanContextDatabase(int min_keyframe_gap = 25, double sc_distance_threshold = 0.16);
 
     static ScanContextDescriptor computeDescriptor(
         uint64_t keyframe_id,
         double timestamp_sec,
         const std::vector<core::LidarPointXYZIRT>& local_points,
-        const std::optional<core::RgbFrame>& optional_rgb = std::nullopt);
+        const std::optional<core::RgbFrame>& optional_rgb = std::nullopt,
+        const math::SO3d& R_gravity_align = math::SO3d());
 
     // Computes minimum column-shifted cosine distance between two Scan Context descriptors
     static double computeDistanceAndYawShift(const ScanContextDescriptor& query,

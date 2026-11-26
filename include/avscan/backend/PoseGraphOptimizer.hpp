@@ -54,8 +54,12 @@ public:
     // Updates all keyframe submap global poses in place
     OptimizationReport optimizeGlobalPoseGraph(int max_iterations = 25);
 
-    // Reconstructs the globally consistent point cloud from all corrected keyframe submaps
-    std::vector<core::LidarPointXYZIRT> buildGloballyConsistentPointCloud(size_t downsample_stride = 1) const;
+    // Reconstructs the globally consistent point cloud from all corrected keyframe submaps.
+    // When voxel_dedup_m > 0, merges overlapping submap points into a single unified voxel grid,
+    // preferring colorized RGB observations over uncolored intensity fallback points.
+    std::vector<core::LidarPointXYZIRT> buildGloballyConsistentPointCloud(
+        size_t downsample_stride = 1,
+        double voxel_dedup_m = 0.0) const;
 
     const std::vector<core::KeyframeSubmap>& getSubmaps() const { return submaps_; }
     std::vector<core::KeyframeSubmap>& getMutableSubmaps() { return submaps_; }

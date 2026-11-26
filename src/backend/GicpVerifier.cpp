@@ -64,6 +64,12 @@ GicpVerificationResult GicpVerifier::verifyLoopConstraint(
         return res;
     }
 
+    // Stride-downsample dense Airy sweeps so verification stays < 15 ms on mobile CPUs
+    const size_t src_stride = (config_.max_source_points > 0 && source_local_points.size() > config_.max_source_points)
+        ? (source_local_points.size() / config_.max_source_points)
+        : 1;
+    const size_t evaluated_src_count = (source_local_points.size() + src_stride - 1) / src_stride;
+
     for (int iter = 0; iter < config_.max_iterations; ++iter) {
         res.iterations_run = iter + 1;
         double HTH[6][6]{};
@@ -71,7 +77,8 @@ GicpVerificationResult GicpVerifier::verifyLoopConstraint(
         size_t inliers = 0;
         double sum_sq_err = 0.0;
 
-        for (const auto& pt : source_local_points) {
+        for (size_t idx = 0; idx < source_local_points.size(); idx += src_stride) {
+            const auto& pt = source_local_points[idx];
             math::Vec3d ps(pt.x, pt.y, pt.z);
             math::Vec3d pt_in_target = res.T_target_source.transform(ps);
 
@@ -93,34 +100,58 @@ GicpVerificationResult GicpVerifier::verifyLoopConstraint(
                 }
                 sum_sq_err += r * r;
                 inliers++;
-            } else {
-                // Check voxel centroid correspondence within neighborhood
-                slam::VoxelKey vk = target_map.pointToKey(pt_in_target);
-                auto it = target_voxels.find(vk);
-                if (it != target_voxels.end() && !it->second.points.empty()) {
-                    math::Vec3d diff = pt_in_target - it->second.mean;
-                    double d = diff.norm();
-                    if (d < config_.max_correspondence_dist_m) {
-                        math::Vec3d unit_dir = (d > 1e-6) ? (diff / d) : math::Vec3d(1, 0, 0);
-                        math::Vec3d R_u = res.T_target_source.so3.R.transpose() * unit_dir;
-                        math::Vec3d J_rot = ps.cross(R_u);
-                        double J[6] = {unit_dir.x, unit_dir.y, unit_dir.z, J_rot.x, J_rot.y, J_rot.z};
-                        double w = (d <= 0.10) ? 1.0 : (0.10 / d);
+            } else if (config_.allow_centroid_fallback) {
+                // Search 7-voxel neighborhood for closest target centroid when planes are sparse
+                slam::VoxelKey base_vk = target_map.pointToKey(pt_in_target);
+                static constexpr int64_t kNbOffsets[7][3] = {
+                    {0, 0, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+                };
+                double best_d = config_.max_correspondence_dist_m;
+                math::Vec3d best_diff(0.0, 0.0, 0.0);
+                bool found_nb = false;
+                for (int nb = 0; nb < 7; ++nb) {
+                    slam::VoxelKey vk{
+                        base_vk.x + kNbOffsets[nb][0],
+                        base_vk.y + kNbOffsets[nb][1],
+                        base_vk.z + kNbOffsets[nb][2]
+                    };
+                    auto it = target_voxels.find(vk);
+                    if (it != target_voxels.end() && !it->second.points.empty()) {
+                        for (const auto& tp : it->second.points) {
+                            math::Vec3d diff = pt_in_target - tp;
+                            double d = diff.norm();
+                            if (d < best_d) {
+                                best_d = d;
+                                best_diff = diff;
+                                found_nb = true;
+                            }
+                        }
+                    }
+                }
+                if (found_nb) {
+                    // 3D point-to-centroid residuals (r_k = (pt_in_target - mean)_k for k = x,y,z)
+                    const double w = (best_d <= 0.10) ? 1.0 : (0.10 / best_d);
+                    const double r_vec[3] = {best_diff.x, best_diff.y, best_diff.z};
+                    for (int axis = 0; axis < 3; ++axis) {
+                        math::Vec3d e_axis(axis == 0 ? 1.0 : 0.0, axis == 1 ? 1.0 : 0.0, axis == 2 ? 1.0 : 0.0);
+                        math::Vec3d R_e = res.T_target_source.so3.R.transpose() * e_axis;
+                        math::Vec3d J_rot = ps.cross(R_e);
+                        double J[6] = {e_axis.x, e_axis.y, e_axis.z, J_rot.x, J_rot.y, J_rot.z};
                         for (int r_i = 0; r_i < 6; ++r_i) {
-                            HTr[r_i] -= w * J[r_i] * d;
+                            HTr[r_i] -= w * J[r_i] * r_vec[axis];
                             for (int c_i = 0; c_i < 6; ++c_i) {
                                 HTH[r_i][c_i] += w * J[r_i] * J[c_i];
                             }
                         }
-                        sum_sq_err += d * d;
-                        inliers++;
                     }
+                    sum_sq_err += best_d * best_d;
+                    inliers++;
                 }
             }
         }
 
         res.inlier_count = inliers;
-        res.inlier_overlap_ratio = static_cast<double>(inliers) / static_cast<double>(source_local_points.size());
+        res.inlier_overlap_ratio = static_cast<double>(inliers) / static_cast<double>(std::max<size_t>(1, evaluated_src_count));
         if (inliers < 10) break;
 
         res.fitness_rmse_m = std::sqrt(sum_sq_err / static_cast<double>(inliers));

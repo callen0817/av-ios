@@ -45,9 +45,12 @@ public:
 
     static constexpr double kDistanceResolutionMeters = 0.005;  // 5 mm per LSB (lower 14 bits)
     static constexpr double kAzimuthResolutionDeg = 0.01;       // 0.01 deg per LSB
-    static constexpr double kBlockIntervalSec = 55.555e-6;      // 55.55 us per firing group
-    static constexpr double kChannelIntervalSec = 1.157e-6;     // 1.157 us per channel firing
-    static constexpr double kMinValidRangeMeters = 0.10;
+    static constexpr double kBlockIntervalSec = 111.080e-6;     // 111.08 us per 96-beam firing pair (decoder_RSAIRY.hpp)
+    static constexpr double kChannelIntervalSec = 1.157e-6;     // Nominal channel spacing
+    static constexpr double kLensCenterRX = 0.0075;             // Airy optical lens center X offset (m)
+    static constexpr double kLensCenterRY = 0.00664;            // Airy optical lens center Y offset (m)
+    static constexpr double kLensCenterRZ = 0.04532;            // Airy optical lens center Z offset (m)
+    static constexpr double kMinValidRangeMeters = 0.60;        // Blind zone matching av-scanar robosense.yaml (filters hand/rig hits)
     static constexpr double kMaxValidRangeMeters = 60.0;
 
     AiryDecoder();
@@ -89,6 +92,9 @@ private:
     std::array<double, kTotalBeams> cos_vert_rad_{};
     std::array<double, kTotalBeams> sin_vert_rad_{};
     std::array<double, kTotalBeams> hor_offset_deg_{};
+    std::array<double, kTotalBeams> chan_ts_offset_sec_{};
+    std::array<double, kTotalBeams> chan_az_ratio_{};
+    double lens_center_rxy_{0.010017};
 
     double last_azimuth_deg_{-1.0};
     uint64_t next_frame_id_{1};

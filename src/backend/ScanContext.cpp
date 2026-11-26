@@ -13,7 +13,8 @@ ScanContextDescriptor ScanContextDatabase::computeDescriptor(
     uint64_t keyframe_id,
     double timestamp_sec,
     const std::vector<core::LidarPointXYZIRT>& local_points,
-    const std::optional<core::RgbFrame>& optional_rgb) {
+    const std::optional<core::RgbFrame>& optional_rgb,
+    const math::SO3d& R_gravity_align) {
     ScanContextDescriptor desc;
     desc.keyframe_id = keyframe_id;
     desc.timestamp_sec = timestamp_sec;
@@ -25,16 +26,18 @@ ScanContextDescriptor ScanContextDatabase::computeDescriptor(
     const double sector_step = (2.0 * math::kPi) / ScanContextDescriptor::kNumSectors;
 
     for (const auto& pt : local_points) {
-        double r = std::sqrt(pt.x * pt.x + pt.y * pt.y);
+        // Project into gravity-leveled horizontal frame so +Z is always true vertical UP
+        const math::Vec3d p = R_gravity_align * math::Vec3d(pt.x, pt.y, pt.z);
+        double r = std::sqrt(p.x * p.x + p.y * p.y);
         if (r < 0.15 || r >= ScanContextDescriptor::kMaxRadiusMeters) continue;
 
-        double angle = std::atan2(pt.y, pt.x);
+        double angle = std::atan2(p.y, p.x);
         if (angle < 0.0) angle += 2.0 * math::kPi;
 
         int r_idx = std::clamp(static_cast<int>(r / ring_step), 0, ScanContextDescriptor::kNumRings - 1);
         int s_idx = std::clamp(static_cast<int>(angle / sector_step), 0, ScanContextDescriptor::kNumSectors - 1);
 
-        float shifted_z = static_cast<float>(std::max(0.0, pt.z + ScanContextDescriptor::kHeightOffsetMeters));
+        float shifted_z = static_cast<float>(std::max(0.0, p.z + ScanContextDescriptor::kHeightOffsetMeters));
         size_t cell = static_cast<size_t>(r_idx * ScanContextDescriptor::kNumSectors + s_idx);
         if (shifted_z > desc.matrix[cell]) {
             desc.matrix[cell] = shifted_z;

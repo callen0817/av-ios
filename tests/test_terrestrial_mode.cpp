@@ -254,6 +254,90 @@ void testTruePngKeyplanExport() {
     std::cout << "  PASS: Valid PNG signature and IHDR/IDAT/IEND chunks verified.\n";
 }
 
+void testSingleShotMotorFreeFlashScan() {
+    std::cout << "[TEST 5] Single-Shot Motor-Free Flash Scan (Decoupled from Terrestrial 6x60 deg)...\n";
+
+    class SpyRotationController : public terrestrial::IRotationController {
+    public:
+        int set_zero_calls = 0;
+        int move_calls = 0;
+        int stop_calls = 0;
+        bool connect() override { return true; }
+        void disconnect() override {}
+        bool isConnected() const override { return true; }
+        terrestrial::MotorCapabilities getCapabilities() const override { return terrestrial::MotorCapabilities{}; }
+        terrestrial::RotationMode getRotationMode() const override { return terrestrial::RotationMode::MANUAL_INDEX; }
+        bool setZeroPosition() override { ++set_zero_calls; return true; }
+        bool moveToAngleDeg(double) override { ++move_calls; return true; }
+        bool moveRelativeDeg(double) override { ++move_calls; return true; }
+        bool getCurrentAngleDeg(double& deg) const override { deg = 0.0; return false; }
+        terrestrial::MotionState getMotionState() const override { return terrestrial::MotionState::STATIONARY; }
+        void setOperatorPromptCallback(PromptOperatorCallback) override {}
+        void stopMotion() override { ++stop_calls; }
+    };
+
+    const fs::path tmp_dir = fs::temp_directory_path() / "av_ios_flash_scan_unit_test";
+    fs::remove_all(tmp_dir);
+    fs::create_directories(tmp_dir);
+
+    auto spy = std::make_shared<SpyRotationController>();
+    terrestrial::TerrestrialStationConfig cfg;
+    cfg.project_id = "TEST_FLASH";
+    cfg.station_id = "flash_st_001";
+    cfg.station_name = "Flash Scan 01";
+    cfg.is_single_shot_flash = true;
+    cfg.T_imu_lidar = math::SE3d(math::SO3d(math::Quatd::fromEuler(0.0, 0.0, 90.0 * math::kDegToRad)),
+                                 math::Vec3d(0.10, -0.05, 0.20));
+    cfg.settling_delay_sec = 0.5;
+    cfg.accumulation_sec_per_stop = 2.0;
+
+    terrestrial::TerrestrialStationManager mgr(cfg, spy);
+    CHECK(mgr.startNewStation(tmp_dir.string(), cfg, core::DeviceProfileRegistry::instance().activeProfile()));
+    CHECK(spy->set_zero_calls == 0);
+
+    double t = 10.0;
+    for (int i = 0; i < 30; ++i) {
+        core::ImuMeasurement imu;
+        imu.timestamp_sec = t;
+        imu.gyro_rads = {0.001, -0.001, 0.0};
+        imu.accel_mps2 = {0.0, 0.0, 9.81};
+        mgr.pushImuMeasurement(imu);
+
+        core::LidarFrame frame;
+        frame.timestamp_start_sec = t;
+        frame.timestamp_end_sec = t + 0.1;
+        core::LidarPointXYZIRT pt;
+        pt.x = 2.0; pt.y = 0.0; pt.z = 0.5;
+        frame.points.push_back(pt);
+        mgr.pushLidarFrame(frame);
+        t += 0.1;
+        if (mgr.getCaptureState() == terrestrial::TerrestrialCaptureState::STATION_COMPLETED) break;
+    }
+
+    CHECK(mgr.getCaptureState() == terrestrial::TerrestrialCaptureState::STATION_COMPLETED);
+    CHECK(spy->move_calls == 0 && spy->set_zero_calls == 0);
+
+    std::string err;
+    CHECK(mgr.finalizeAndSaveStation(err));
+    CHECK(spy->set_zero_calls == 0);
+
+    auto cloud = mgr.buildStationPointCloud();
+    CHECK(!cloud.empty());
+    CHECK(approxEq(cloud.front().x, 0.10, 1e-4));
+    CHECK(approxEq(cloud.front().y, 1.95, 1e-4));
+    CHECK(approxEq(cloud.front().z, 0.70, 1e-4));
+
+    {
+        std::ifstream mf(tmp_dir / "stations" / "flash_st_001" / "station_manifest.json");
+        std::string json((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+        CHECK(json.find("\"mode\": \"flash_scan\"") != std::string::npos);
+        CHECK(json.find("\"mode\": \"none_stationary\"") != std::string::npos);
+    }
+
+    fs::remove_all(tmp_dir);
+    std::cout << "  PASS: Single-shot Flash Scan completed in 1 stop with 0 motor commands and exact T_imu_lidar transform.\n";
+}
+
 } // anonymous namespace
 
 int main() {
@@ -262,6 +346,7 @@ int main() {
     testStillnessGateAndDisturbanceRejection();
     testSixStopCaptureRefinementAndExport();
     testTruePngKeyplanExport();
+    testSingleShotMotorFreeFlashScan();
     std::cout << "ALL TERRESTRIAL MODE UNIT TESTS PASSED.\n";
     return 0;
 }

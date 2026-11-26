@@ -65,7 +65,7 @@ struct PlaneCorrespondence {
 
 class VoxelHashMap {
 public:
-    explicit VoxelHashMap(double voxel_size_m = 0.25, size_t max_points_per_voxel = 30, size_t max_active_voxels = 40000);
+    explicit VoxelHashMap(double voxel_size_m = 0.50, size_t max_points_per_voxel = 50, size_t max_active_voxels = 60000);
 
     void setVoxelSize(double voxel_size_m);
     double getVoxelSize() const { return voxel_size_m_; }

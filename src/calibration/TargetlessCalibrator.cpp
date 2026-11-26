@@ -101,6 +101,7 @@ double TargetlessCalibrator::evaluateDirectVLObjective(const std::vector<DirectV
     hist_img.fill(1e-6);
     hist_lidar.fill(1e-6);
 
+    double total_tested = 0.0;
     double total_samples = 0.0;
     double edge_dot_sum = 0.0;
     double edge_img_sq = 0.0;
@@ -113,6 +114,7 @@ double TargetlessCalibrator::evaluateDirectVLObjective(const std::vector<DirectV
         const int h = img.intrinsics.height;
 
         for (size_t i = 0; i < pair.lidar_frame.points.size(); ++i) {
+            total_tested += 1.0;
             const auto& pt = pair.lidar_frame.points[i];
             math::Vec3d p_lidar(pt.x, pt.y, pt.z);
             math::Vec3d p_cam = candidate_T_cam_lidar.transform(p_lidar);
@@ -153,7 +155,7 @@ double TargetlessCalibrator::evaluateDirectVLObjective(const std::vector<DirectV
         }
     }
 
-    if (total_samples < 25.0) {
+    if (total_samples < 25.0 || (total_tested > 0.0 && (total_samples / total_tested) < 0.05)) {
         if (out_nid) *out_nid = 1.0;
         if (out_edge_corr) *out_edge_corr = 0.0;
         return 1.0;
@@ -260,26 +262,39 @@ bool TargetlessCalibrator::runFullTargetlessCalibration(
     // Step 2: Temporal offset estimation between IMU gyro and camera angular velocity
     double peak_ncc = 0.0;
     double dt_offset = sync::TimeSynchronizer::estimateTemporalOffsetByCrossCorrelation(
-        imu_gyro_norms, cam_rot_norms, 0.20, 0.001, &peak_ncc);
-    out_profile.camera_time_offset_sec = dt_offset;
+        imu_gyro_norms, cam_rot_norms, 0.12, 0.001, &peak_ncc);
+    // Only apply estimated camera time offset if cross-correlation shows a clean peak
+    out_profile.camera_time_offset_sec = (peak_ncc >= 0.45) ? std::clamp(dt_offset, -0.08, 0.08) : 0.0;
 
     // Step 3: DirectVLCalib photometric/edge refinement initialized at Hand-Eye estimate
     math::SE3d T_refined = T_init;
     double nid = 1.0, direct_conf = 0.0;
+    bool vl_ok = true;
     if (!visual_lidar_pairs.empty()) {
         optimizeDirectVLCalib(visual_lidar_pairs, T_init, T_refined, nid, direct_conf);
+        // Hard visibility & alignment gate: never lock green if DirectVLCalib saw zero FOV overlap (nid == 1.0)
+        vl_ok = (nid < 0.96 && direct_conf >= 0.30);
     } else {
         nid = 0.25;
         direct_conf = 0.75;
     }
 
+    // Physical sanity gate:
+    // 1. Handheld rig lever arm cannot exceed 0.50 m
+    // 2. Airy dome (+Z_lidar) must have positive forward overlap with camera optical axis (+Z_cam),
+    //    strictly rejecting 180-deg flipped solutions where points project behind the camera
+    const bool lever_arm_sane = (T_refined.t.norm() <= 0.50);
+    const bool forward_fov_sane = (T_refined.so3.R(2, 2) > 0.25);
+
     double he_conf = std::clamp(1.0 - (rot_res_deg / 10.0), 0.0, 1.0);
-    double sync_conf = (imu_gyro_norms.size() >= 5) ? std::clamp(peak_ncc, 0.5, 1.0) : 0.85;
+    double sync_conf = (imu_gyro_norms.size() >= 5 && cam_rot_norms.size() >= 5)
+        ? std::clamp(peak_ncc, 0.4, 1.0)
+        : 0.85;
 
     out_profile.T_cam_lidar = T_refined;
     out_profile.nid_metric = nid;
     out_profile.confidence_score = 0.45 * he_conf + 0.35 * direct_conf + 0.20 * sync_conf;
-    out_profile.verified = (out_profile.confidence_score >= 0.60);
+    out_profile.verified = (vl_ok && lever_arm_sane && forward_fov_sane && out_profile.confidence_score >= 0.60);
     return out_profile.verified;
 }
 

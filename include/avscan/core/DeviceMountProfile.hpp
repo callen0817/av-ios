@@ -23,6 +23,7 @@ enum class DeviceFormFactor {
     IPHONE_16_BASE,      // iPhone 16 / 16 Plus (USB-C)
     IPHONE_16_PRO,       // iPhone 16 Pro (USB-C LiDAR)
     IPHONE_16_PRO_MAX,   // iPhone 16 Pro Max (USB-C LiDAR)
+    SCANAR_V4_EXTERNAL,  // External ScanAR V4 rig (Airy 45-deg + USB-C Orbbec Gemini 336L; iPad is display/compute only)
     CUSTOM_MOUNT
 };
 
@@ -33,6 +34,8 @@ struct DeviceMountProfile {
     DeviceFormFactor form_factor{DeviceFormFactor::IPAD_10TH_GEN};
     bool is_phone{false};
     bool has_native_lidar{false};
+    bool uses_external_usb_camera{false};  // True when RGB comes from external USB-C UVC camera (never built-in iPad cam)
+    std::string preferred_usb_camera_name{}; // Substring hint for external UVC discovery (e.g. "Orbbec")
 
     // Physical dimensions & offsets
     double screen_diagonal_inches{10.9};

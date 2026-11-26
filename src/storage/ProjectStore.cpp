@@ -124,6 +124,7 @@ bool ProjectStore::loadSubmapFromDisk(core::KeyframeSubmap& io_submap) const {
             return false;
         }
     }
+    io_submap.archived_to_disk = false;
     return true;
 }
 

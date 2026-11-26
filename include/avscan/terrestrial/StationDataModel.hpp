@@ -54,6 +54,10 @@ struct TerrestrialStationConfig {
     double max_motion_angular_vel_rads{0.05}; // IMU stillness threshold
     bool enable_overlap_refinement{true};
     bool enable_camera_capture{true};
+
+    // Single-shot stationary Flash Scan during Mobile SLAM (NO turntable, NO motor, 1 pose in IMU body frame)
+    bool is_single_shot_flash{false};
+    math::SE3d T_imu_lidar{math::SE3d::Identity()};
 };
 
 struct TerrestrialStationMetadata {

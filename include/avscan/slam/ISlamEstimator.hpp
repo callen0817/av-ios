@@ -11,6 +11,7 @@ namespace slam {
 struct EstimatorMetrics {
     uint64_t frames_processed{0};
     size_t deskewed_points_count{0};
+    size_t evaluated_features_count{0};
     size_t geometric_correspondences{0};
     size_t visual_patch_correspondences{0};
     double geometric_rmse_m{0.0};

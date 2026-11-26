@@ -7,11 +7,13 @@ namespace avscan {
 namespace backend {
 
 struct GicpVerificationConfig {
-    double voxel_resolution_m{0.30};
-    double max_correspondence_dist_m{0.50};
+    double voxel_resolution_m{0.35};
+    double max_correspondence_dist_m{0.40};
     int max_iterations{20};
     double min_inlier_overlap_ratio{0.35};
-    double max_fitness_rmse_m{0.18};
+    double max_fitness_rmse_m{0.15};
+    size_t max_source_points{4000};
+    bool allow_centroid_fallback{true};
 };
 
 struct GicpVerificationResult {

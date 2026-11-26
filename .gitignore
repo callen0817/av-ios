@@ -95,3 +95,9 @@ certs/
 *.mobileprovision
 *.certSigningRequest
 *.cer
+
+# Local debugging live scan captures (NEVER commit)
+tests/live scans/
+tests/live_scans/
+*.avraw
+

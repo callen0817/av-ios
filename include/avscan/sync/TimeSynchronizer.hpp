@@ -66,7 +66,11 @@ private:
     mutable std::mutex mutex_;
     std::deque<core::ImuMeasurement> imu_buffer_;
     std::deque<core::LidarFrame> lidar_buffer_;
-    std::deque<core::RgbFrame> rgb_buffer_;
+    struct StampedRgbFrame {
+        double host_timestamp_sec{0.0};
+        core::RgbFrame frame;
+    };
+    std::deque<StampedRgbFrame> rgb_buffer_;
 
     std::deque<double> offset_window_;
     double last_imu_timestamp_{-1.0};

@@ -129,6 +129,7 @@ simd_float4x4 makeLookAtMatrix(simd_float3 eye, simd_float3 target, simd_float3 
     float _minZ;
     float _maxZ;
     simd_float3 _cameraTarget;
+    BOOL _userHasPanned;
     std::mutex _bufferMutex;
 }
 
@@ -171,7 +172,7 @@ simd_float4x4 makeLookAtMatrix(simd_float3 eye, simd_float3 target, simd_float3 
         depthDesc.depthWriteEnabled = YES;
         _depthState = [_device newDepthStencilStateWithDescriptor:depthDesc];
 
-        _bufferCapacity = 250000;
+        _bufferCapacity = 600000;
         _vertexBuffer = [_device newBufferWithLength:_bufferCapacity * sizeof(GpuPointVertex)
                                              options:MTLResourceStorageModeShared];
         _vertexCount = 0;
@@ -186,9 +187,11 @@ simd_float4x4 makeLookAtMatrix(simd_float3 eye, simd_float3 target, simd_float3 
     _cameraYawRad = -0.78f;
     _cameraPitchRad = 0.65f;
     _cameraTarget = simd_make_float3(0.0f, 0.0f, 0.0f);
+    _userHasPanned = NO;
 }
 
 - (void)panByDeltaX:(float)dx deltaY:(float)dy {
+    _userHasPanned = YES;
     float scale = _cameraDistance * 0.002f;
     _cameraTarget.x -= dx * scale * std::sin(_cameraYawRad);
     _cameraTarget.y += dx * scale * std::cos(_cameraYawRad);
@@ -253,7 +256,7 @@ simd_float4x4 makeLookAtMatrix(simd_float3 eye, simd_float3 target, simd_float3 
         dst[count++] = tv;
     }
 
-    if (!trajectory.empty()) {
+    if (!trajectory.empty() && !_userHasPanned) {
         const auto &last = trajectory.back().T_world_body.t;
         _cameraTarget = simd_make_float3(static_cast<float>(last.x),
                                          static_cast<float>(last.y),

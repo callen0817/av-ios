@@ -68,6 +68,11 @@ public:
 
     void reset(const AutoCalibConfig& config = AutoCalibConfig{});
 
+    // Seeds the calibrator from a calibrated DeviceMountProfile so RGB colorization starts immediately
+    // on Frame 1 while bounded DirectVLCalib micro-refinement trims any small clamp offset online.
+    void seedFromMountProfile(const core::ExtrinsicCalibrationProfile& profile,
+                              const AutoCalibConfig& config = AutoCalibConfig{});
+
     // Ingest camera pose from ARKit / VIO (in host monotonic clock domain).
     void pushCameraPose(double host_timestamp_sec, const math::SE3d& T_world_cam);
 
@@ -130,12 +135,15 @@ private:
     std::deque<StampedPose> cam_poses_;
     bool has_prev_key_pose_{false};
     bool has_initial_lock_{false};
+    bool seeded_from_profile_{false};
     bool env_feature_rich_{false};
     bool continuous_refine_in_flight_{false};
     double start_time_sec_{-1.0};
     double last_lidar_time_sec_{-1.0};
     double last_vl_capture_time_sec_{-1.0};
     double last_continuous_refine_time_sec_{-1.0};
+    double last_clock_offset_sec_{0.0};
+    bool has_clock_offset_{false};
     math::SE3d prev_T_world_lidar_{math::SE3d::Identity()};
     math::SE3d prev_T_world_cam_{math::SE3d::Identity()};
 
