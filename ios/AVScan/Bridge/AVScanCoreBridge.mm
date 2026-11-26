@@ -208,8 +208,23 @@ void rebuildLiveVoxelIndex(
             AVScanCoreBridge *strongSelf = weakSelf;
             if (!strongSelf) return;
             std::lock_guard<std::mutex> lock(strongSelf->_stateMutex);
+            const double dRotDeg =
+                (strongSelf->_factoryCalib.T_imu_lidar.so3.inverse() * calib.T_imu_lidar.so3).log().norm() *
+                (180.0 / 3.14159265358979323846);
             strongSelf->_factoryCalib = calib;
             strongSelf->_slamEngine.setFactoryCalibration(calib);
+            // If late DIFOP shifts T_imu_lidar > 5 deg during startup, flush any pre-DIFOP baked Keyframe 0
+            if (dRotDeg > 5.0 && strongSelf->_isScanning && strongSelf->_poseGraph.getSubmaps().size() <= 5) {
+                strongSelf->_poseGraph.clear();
+                strongSelf->_scDatabase.clear();
+                strongSelf->_cachedGlobalCloud.clear();
+                strongSelf->_liveDisplayVoxelIndex.clear();
+                strongSelf->_keyframeTraveledDist.clear();
+                strongSelf->_nextKeyframeId = 1;
+                strongSelf->_totalTraveledDistM = 0.0;
+                strongSelf->_unclosedTrajectoryDistM = 0.0;
+                strongSelf->_hasPrevOdomPos = false;
+            }
         }
     );
 

@@ -52,7 +52,12 @@ FastLivo2Engine::FastLivo2Engine(const FastLivo2Config& config)
 }
 
 void FastLivo2Engine::setFactoryCalibration(const core::AiryFactoryCalibration& calib) {
+    const double d_rot_deg =
+        (factory_calib_.T_imu_lidar.so3.inverse() * calib.T_imu_lidar.so3).log().norm() * math::kRadToDeg;
     factory_calib_ = calib;
+    if (d_rot_deg > 5.0 && trajectory_.size() <= 15) {
+        local_map_.clear();
+    }
 }
 
 void FastLivo2Engine::setExtrinsicCalibration(const core::ExtrinsicCalibrationProfile& profile) {
@@ -1023,11 +1028,13 @@ bool FastLivo2Engine::processBundle(const sync::SyncBundle& bundle,
     local_map_.insertPoints(map_insert_pts, bundle.lidar_frame.frame_id);
     local_map_.pruneDistantOrStaleVoxels(state_.T_world_body.t, 45.0, bundle.lidar_frame.frame_id);
 
-    // 8. Keyframe emission criteria
+    // 8. Keyframe emission criteria (require >= 2 warmup sweeps so Keyframe 0 is settled & registered)
     if (!has_first_keyframe_) {
-        last_keyframe_pose_ = state_.T_world_body;
-        has_first_keyframe_ = true;
-        out_metrics.keyframe_emitted = true;
+        if (trajectory_.size() >= 2) {
+            last_keyframe_pose_ = state_.T_world_body;
+            has_first_keyframe_ = true;
+            out_metrics.keyframe_emitted = true;
+        }
     } else {
         const math::SE3d dT = last_keyframe_pose_.inverse() * state_.T_world_body;
         const double trans_dist = dT.t.norm();
